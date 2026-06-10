@@ -6,13 +6,14 @@
   "packageManager": "bun",
   "scripts": {
     "build": "tsc && cp src/web/ui.html dist/web/ui.html",
+    "build:binary": "bun build src/index.ts --compile --outfile dist/shit-bot && cp src/web/ui.html dist/ui.html",
+    "build:binary:docker": "docker run --rm -v $(pwd):/app -w /app oven/bun sh -c 'bun install && bun build src/index.ts --compile --outfile dist/shit-bot && cp src/web/ui.html dist/ui.html'",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts",
+    "dev": "bun run src/index.ts",
     "deploy": "bunx hugo && wrangler deploy",
     "preview": "bunx hugo && wrangler dev"
   },
   "dependencies": {
-    "better-sqlite3": "^12.10.0",
     "discord.js": "^14.14.1",
     "dotenv": "^16.3.1",
     "https-proxy-agent": "^9.0.0",
@@ -25,10 +26,10 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.11.5",
     "@types/node-cron": "^3.0.11",
     "@types/speakeasy": "^2.0.10",
+    "bun-types": "^1.3.14",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3",
     "wrangler": "^4.98.0"

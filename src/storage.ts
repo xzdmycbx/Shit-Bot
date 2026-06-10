@@ -1,11 +1,17 @@
-import Database from 'better-sqlite3';
+import { Database } from 'bun:sqlite';
 import * as path from 'path';
 import * as fs from 'fs';
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
+function resolveDataDir(): string {
+  const cwd = path.join(process.cwd(), 'data');
+  if (fs.existsSync(cwd)) return cwd;
+  return path.join(__dirname, '..', 'data');
+}
+
+const DATA_DIR = resolveDataDir();
 const DB_PATH = path.join(DATA_DIR, 'bot.db');
 
-let db: Database.Database | null = null;
+let db: Database | null = null;
 
 function ensureDataDir(): void {
   if (!fs.existsSync(DATA_DIR)) {
@@ -18,9 +24,9 @@ export function initDatabase(): void {
 
   db = new Database(DB_PATH);
 
-  db.pragma('journal_mode = WAL');
+  db.run('PRAGMA journal_mode = WAL');
 
-  db.exec(`
+  db.run(`
     CREATE TABLE IF NOT EXISTS sent_tweets (
       id TEXT PRIMARY KEY,
       author TEXT NOT NULL,
@@ -30,7 +36,7 @@ export function initDatabase(): void {
     )
   `);
 
-  db.exec(`
+  db.run(`
     CREATE TABLE IF NOT EXISTS image_cache (
       tweet_id TEXT PRIMARY KEY,
       image_data BLOB NOT NULL,
@@ -38,18 +44,13 @@ export function initDatabase(): void {
     )
   `);
 
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_sent_tweets_author ON sent_tweets(author)
-  `);
-
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_sent_tweets_sent_at ON sent_tweets(sent_at)
-  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_sent_tweets_author ON sent_tweets(author)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_sent_tweets_sent_at ON sent_tweets(sent_at)');
 
   console.log(`Database initialized: ${DB_PATH}`);
 }
 
-export function getDatabase(): Database.Database {
+export function getDatabase(): Database {
   if (!db) {
     initDatabase();
   }
@@ -58,39 +59,31 @@ export function getDatabase(): Database.Database {
 
 export function markAsSent(tweetId: string, author?: string, content?: string, url?: string): void {
   const database = getDatabase();
-
-  const stmt = database.prepare(`
-    INSERT OR IGNORE INTO sent_tweets (id, author, content, url, sent_at)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-
-  stmt.run(tweetId, author || '', content || '', url || '', Date.now());
+  database.run(
+    `INSERT OR IGNORE INTO sent_tweets (id, author, content, url, sent_at) VALUES (?, ?, ?, ?, ?)`,
+    [tweetId, author || '', content || '', url || '', Date.now()]
+  );
 }
 
 export function isAlreadySent(tweetId: string): boolean {
   const database = getDatabase();
-
-  const stmt = database.prepare('SELECT 1 FROM sent_tweets WHERE id = ?');
-  const row = stmt.get(tweetId);
-
+  const row = database.query('SELECT 1 FROM sent_tweets WHERE id = ?').get(tweetId);
   return !!row;
 }
 
 export function markMultipleAsSent(tweets: Array<{ id: string; author: string; content: string; url: string }>): void {
   const database = getDatabase();
 
-  const stmt = database.prepare(`
-    INSERT OR IGNORE INTO sent_tweets (id, author, content, url, sent_at)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-
-  const insertMany = database.transaction((items: typeof tweets) => {
+  const insert = database.transaction((items: typeof tweets) => {
     for (const tweet of items) {
-      stmt.run(tweet.id, tweet.author, tweet.content, tweet.url, Date.now());
+      database.run(
+        `INSERT OR IGNORE INTO sent_tweets (id, author, content, url, sent_at) VALUES (?, ?, ?, ?, ?)`,
+        [tweet.id, tweet.author, tweet.content, tweet.url, Date.now()]
+      );
     }
   });
 
-  insertMany(tweets);
+  insert(tweets);
 }
 
 export function isTooOld(publishedAt: Date, maxAgeMinutes: number): boolean {
@@ -102,11 +95,8 @@ export function isTooOld(publishedAt: Date, maxAgeMinutes: number): boolean {
 
 export function cleanupOldRecords(maxAgeDays: number = 30): number {
   const database = getDatabase();
-
   const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
-
-  const stmt = database.prepare('DELETE FROM sent_tweets WHERE sent_at < ?');
-  const result = stmt.run(cutoff);
+  const result = database.run('DELETE FROM sent_tweets WHERE sent_at < ?', [cutoff]);
 
   if (result.changes > 0) {
     console.log(`Cleaned up ${result.changes} old records`);
@@ -117,10 +107,7 @@ export function cleanupOldRecords(maxAgeDays: number = 30): number {
 
 export function getSentCount(): number {
   const database = getDatabase();
-
-  const stmt = database.prepare('SELECT COUNT(*) as count FROM sent_tweets');
-  const row = stmt.get() as { count: number };
-
+  const row = database.query('SELECT COUNT(*) as count FROM sent_tweets').get() as { count: number };
   return row.count;
 }
 
@@ -132,38 +119,27 @@ export function getRecentTweets(limit: number = 10): Array<{
   sent_at: number;
 }> {
   const database = getDatabase();
-
-  const stmt = database.prepare('SELECT * FROM sent_tweets ORDER BY sent_at DESC LIMIT ?');
-  return stmt.all(limit) as any[];
+  return database.query('SELECT * FROM sent_tweets ORDER BY sent_at DESC LIMIT ?').all(limit) as any[];
 }
 
 export function cacheImage(tweetId: string, imageBuffer: Buffer): void {
   const database = getDatabase();
-
-  const stmt = database.prepare(`
-    INSERT OR REPLACE INTO image_cache (tweet_id, image_data, created_at)
-    VALUES (?, ?, ?)
-  `);
-
-  stmt.run(tweetId, imageBuffer, Date.now());
+  database.run(
+    `INSERT OR REPLACE INTO image_cache (tweet_id, image_data, created_at) VALUES (?, ?, ?)`,
+    [tweetId, imageBuffer, Date.now()]
+  );
 }
 
 export function getCachedImage(tweetId: string): Buffer | null {
   const database = getDatabase();
-
-  const stmt = database.prepare('SELECT image_data FROM image_cache WHERE tweet_id = ?');
-  const row = stmt.get(tweetId) as { image_data: Buffer } | undefined;
-
+  const row = database.query('SELECT image_data FROM image_cache WHERE tweet_id = ?').get(tweetId) as { image_data: Buffer } | undefined;
   return row ? row.image_data : null;
 }
 
 export function cleanupExpiredImages(maxAgeMinutes: number = 60): number {
   const database = getDatabase();
-
   const cutoff = Date.now() - (maxAgeMinutes * 60 * 1000);
-
-  const stmt = database.prepare('DELETE FROM image_cache WHERE created_at < ?');
-  const result = stmt.run(cutoff);
+  const result = database.run('DELETE FROM image_cache WHERE created_at < ?', [cutoff]);
 
   if (result.changes > 0) {
     console.log(`Cleaned up ${result.changes} expired cached images`);

@@ -402,14 +402,14 @@ function dispatchToTargets(pending: PendingApproval, targetTag?: string): void {
 
   if (targetTag === 'r14' && config.discord.r14ChannelId) {
     pending.sentTo = 'R14 (Discord)';
-    withTimeout(sendToDiscord(pending.tweet, config.discord.r14ChannelId, undefined, imageBuf).then(Boolean), 20000, 'Discord/R14');
+    withTimeout(sendToDiscord(pending.tweet, config.discord.r14ChannelId, true, imageBuf).then(Boolean), 20000, 'Discord/R14');
     return;
   }
 
   if (targetTag && config.telegram.targets?.[targetTag]) {
     const targetChatId = config.telegram.targets[targetTag].chatId;
     pending.sentTo = targetTag.toUpperCase();
-    withTimeout(sendToTelegram(pending.tweet, targetChatId, undefined, imageBuf).then(Boolean), 20000, `Telegram/${targetTag}`);
+    withTimeout(sendToTelegram(pending.tweet, targetChatId, true, imageBuf).then(Boolean), 20000, `Telegram/${targetTag}`);
     return;
   }
 
@@ -419,15 +419,15 @@ function dispatchToTargets(pending: PendingApproval, targetTag?: string): void {
 
   pending.sentTo = 'All';
   if (config.telegram.enabled) {
-    withTimeout(sendToTelegram(pending.tweet, undefined, undefined, imageBuf).then(Boolean), 20000, 'Telegram/main');
+    withTimeout(sendToTelegram(pending.tweet, undefined, true, imageBuf).then(Boolean), 20000, 'Telegram/main');
   }
 
   for (const [tag, target] of Object.entries(config.telegram.targets || {})) {
-    withTimeout(sendToTelegram(pending.tweet, target.chatId, undefined, imageBuf).then(Boolean), 20000, `Telegram/${tag}`);
+    withTimeout(sendToTelegram(pending.tweet, target.chatId, true, imageBuf).then(Boolean), 20000, `Telegram/${tag}`);
   }
 
   if (config.discord.enabled) {
-    withTimeout(sendToDiscord(pending.tweet, undefined, undefined, imageBuf).then(Boolean), 20000, 'Discord');
+    withTimeout(sendToDiscord(pending.tweet, undefined, true, imageBuf).then(Boolean), 20000, 'Discord');
   }
 }
 
@@ -476,16 +476,6 @@ export async function handleTelegramApproval(ctx: Context): Promise<void> {
 
   const config = getConfig();
   const adminName = getTelegramAdminName(ctx);
-
-  try {
-    if (isReject) {
-      await ctx.answerCbQuery('❌ Rejected');
-    } else {
-      await ctx.answerCbQuery('✅ Approved!');
-    }
-  } catch (e) {
-    console.warn('Failed to answer callback query (may be too old):', (e as Error).message);
-  }
 
   if (!isReject) {
     pending.approved = true;
@@ -560,8 +550,9 @@ async function handleDiscordApprovalImpl(interaction: ButtonInteraction): Promis
 
   const adminName = getDiscordAdminName(interaction);
 
+  await interaction.deferUpdate();
+
   if (!isReject) {
-    await interaction.reply({ content: '✅ Approved!', ephemeral: true });
     pending.approved = true;
     pending.approvedBy = adminName;
 
@@ -570,7 +561,6 @@ async function handleDiscordApprovalImpl(interaction: ButtonInteraction): Promis
     await notifyOtherAdmins(pending, adminName, 'approved');
     console.log(`Approved by ${adminName} (Discord): ${approvalId}${targetTag ? ` → ${targetTag}` : ''}`);
   } else {
-    await interaction.reply({ content: '❌ Rejected', ephemeral: true });
     await notifyOtherAdmins(pending, adminName, 'rejected');
     console.log(`Rejected by ${adminName} (Discord): ${approvalId}`);
   }

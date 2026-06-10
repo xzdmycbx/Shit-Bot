@@ -5,15 +5,24 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { parse as parseToml } from 'smol-toml';
 import { AppConfig } from './types';
 
-dotenv.config();
-
-const BASE_DIR = path.join(__dirname, '..');
 const CONFIG_CANDIDATES = [
   'config.yaml',
   'config.yml',
   'config.toml',
   'config.json',
 ];
+
+function resolveBaseDir(): string {
+  const cwd = process.cwd();
+  for (const candidate of CONFIG_CANDIDATES) {
+    if (fs.existsSync(path.join(cwd, candidate))) return cwd;
+  }
+  return path.join(__dirname, '..');
+}
+
+dotenv.config();
+
+const BASE_DIR = resolveBaseDir();
 
 let config: AppConfig | null = null;
 let loadedConfigPath: string | null = null;

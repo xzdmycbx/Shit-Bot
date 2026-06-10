@@ -71,8 +71,14 @@ function sanitizeConfigForAPI(cfg: AppConfig): any {
   };
 }
 
+function resolveUIPath(): string {
+  const cwdPath = path.join(process.cwd(), 'ui.html');
+  if (fs.existsSync(cwdPath)) return cwdPath;
+  return path.join(__dirname, 'ui.html');
+}
+
 function serveUI(res: http.ServerResponse): void {
-  const uiPath = path.join(__dirname, 'ui.html');
+  const uiPath = resolveUIPath();
   try {
     const html = fs.readFileSync(uiPath, 'utf-8');
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
