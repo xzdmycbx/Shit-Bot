@@ -107,12 +107,24 @@ function validateConfig(cfg: AppConfig): void {
     throw new Error('No users configured to monitor');
   }
 
-  if (cfg.discord.enabled && (!cfg.discord.token || !cfg.discord.channelId)) {
-    throw new Error('Discord is enabled but token or channelId is missing');
+  const hasGroups = !!(cfg.groups && cfg.groups.length > 0);
+
+  if (cfg.discord.enabled) {
+    if (!cfg.discord.token) {
+      throw new Error('Discord is enabled but token is missing');
+    }
+    if (!hasGroups && !cfg.discord.channelId) {
+      throw new Error('Discord is enabled but channelId is missing');
+    }
   }
 
-  if (cfg.telegram.enabled && (!cfg.telegram.token || !cfg.telegram.chatId)) {
-    throw new Error('Telegram is enabled but token or chatId is missing');
+  if (cfg.telegram.enabled) {
+    if (!cfg.telegram.token) {
+      throw new Error('Telegram is enabled but token is missing');
+    }
+    if (!hasGroups && !cfg.telegram.chatId) {
+      throw new Error('Telegram is enabled but chatId is missing');
+    }
   }
 
   const hasCookies = cfg.twitter.authToken && cfg.twitter.ct0;
