@@ -12,6 +12,15 @@ export async function initTwitterClient(): Promise<boolean> {
 
   const api = new TwitterOpenApi();
 
+  const originalFetch = TwitterOpenApi.fetchApi;
+  TwitterOpenApi.fetchApi = (url: string, init?: any) => {
+    const opts = init || {};
+    if ((globalThis as any).Bun) {
+      opts.tls = { rejectUnauthorized: false };
+    }
+    return originalFetch(url, opts);
+  };
+
   if (authToken && ct0) {
     try {
       client = await api.getClientFromCookies({
