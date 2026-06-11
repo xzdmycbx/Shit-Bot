@@ -3,10 +3,10 @@ import * as http from 'http';
 import { loadConfig, getConfig } from './config';
 import { fetchAllTweets } from './rss/fetcher';
 import { filterTweets, getPassedTweets } from './filters';
-import { initDiscord, shutdownDiscord, getDiscordClient } from './bots/discord';
+import { initDiscord, shutdownDiscord, getDiscordClient, registerDiscordCommands } from './bots/discord';
 import { initTelegram, shutdownTelegram, getTelegramBot } from './bots/telegram';
-import { initDatabase, closeDatabase, markMultipleAsSent, cleanupOldRecords, cleanupExpiredImages } from './storage';
-import { sendForApproval, sendToAllGroups, handleTelegramApproval, handleDiscordApproval, setTelegramBot, setDiscordClient } from './approval';
+import { initDatabase, closeDatabase, markMultipleAsSent, cleanupOldRecords, cleanupExpiredImages, cleanupOldSentMessages, cleanupOldSentTgMessages } from './storage';
+import { sendForApproval, sendToAllGroups, handleTelegramApproval, handleDiscordApproval, setTelegramBot, setDiscordClient, handleRecallCommand, handleRecallMessageContextMenu, handleTelegramRecall, handleDiscordRecall } from './approval';
 import { initRenderer, shutdownRenderer } from './renderer';
 import { initTwitterClient, loginWithCredentials } from './twitter';
 import { startWebServer } from './web/server';
@@ -67,6 +67,8 @@ async function pollAndSend(): Promise<void> {
     console.log(`\n[${new Date().toISOString()}] Starting poll...`);
 
     cleanupExpiredImages(getConfig().imageCacheTtlMinutes);
+    cleanupOldSentMessages(7);
+    cleanupOldSentTgMessages(7);
 
     const allTweets = await fetchAllTweets();
 
@@ -152,6 +154,7 @@ async function start(): Promise<void> {
         telegramBot.action(/^approve_/, handleTelegramApproval);
         telegramBot.action(/^reject_/, handleTelegramApproval);
         telegramBot.action(/^post_/, handleTelegramApproval);
+        telegramBot.action(/^recall_/, handleTelegramRecall);
         
         telegramBot.launch();
         console.log('Telegram bot launched with approval handlers');
@@ -164,9 +167,25 @@ async function start(): Promise<void> {
     if (discordClient) {
       setDiscordClient(discordClient);
 
+      await registerDiscordCommands();
+
       discordClient.on('interactionCreate', async (interaction) => {
+        if (interaction.isMessageContextMenuCommand()) {
+          await handleRecallMessageContextMenu(interaction);
+          return;
+        }
+        if (interaction.isChatInputCommand()) {
+          if (interaction.commandName === 'recall') {
+            await handleRecallCommand(interaction);
+          }
+          return;
+        }
         if (!interaction.isButton()) return;
         const customId = interaction.customId;
+        if (customId.startsWith('recall_')) {
+          await handleDiscordRecall(interaction);
+          return;
+        }
         if (customId.startsWith('approve_') || customId.startsWith('reject_') || customId.startsWith('post_')) {
           await handleDiscordApproval(interaction);
         }

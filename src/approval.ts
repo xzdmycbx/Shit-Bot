@@ -1,11 +1,11 @@
 import { Context, Markup } from 'telegraf';
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, TextChannel, ButtonInteraction, Client, AttachmentBuilder, MessageFlags } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, TextChannel, ButtonInteraction, Client, AttachmentBuilder, MessageFlags, ChatInputCommandInteraction, MessageContextMenuCommandInteraction } from 'discord.js';
 import { ProcessedTweet, GroupConfig } from './types';
 import { getConfig, getEffectiveGroups } from './config';
 import { formatTweetHTML, escapeHTML, formatContentForPlatform } from './filters';
 import { sendToTelegram } from './bots/telegram';
-import { sendToDiscord } from './bots/discord';
-import { markAsSent, cacheImage, getCachedImage } from './storage';
+import { sendToDiscord, recallMessages, recallMessageById } from './bots/discord';
+import { markAsSent, cacheImage, getCachedImage, getSentDiscordMessagesByTweetId, getSentTgMessagesByTweetId, deleteSentMessage, deleteSentTgMessage } from './storage';
 import { renderTweetImage } from './renderer';
 
 interface PendingApproval {
@@ -126,6 +126,10 @@ export async function sendForApproval(tweet: ProcessedTweet): Promise<boolean> {
   for (const group of groups) {
     if (group.blockedUsers?.includes(tweet.author)) {
       console.log(`Skipping approval for group ${group.name}: blocked user @${tweet.author}`);
+      continue;
+    }
+
+    if (group.users && group.users.length > 0 && !group.users.some(u => u.username === tweet.author)) {
       continue;
     }
 
@@ -353,6 +357,13 @@ async function notifyOtherAdmins(
       `<i>${formatContentForPlatform(tweet.content.substring(0, 100), 'html')}${tweet.content.length > 100 ? '...' : ''}</i>`,
     ].join('\n');
 
+    const showRecallButton = action === 'approved';
+    const replyMarkup = showRecallButton
+      ? { reply_markup: Markup.inlineKeyboard([
+          Markup.button.callback('↩️ 撤回', `recall_${approval.id}`),
+        ]).reply_markup }
+      : {};
+
     for (const [adminId, messageId] of approval.telegramMessageIds) {
       try {
         if (approval.hasImage) {
@@ -361,7 +372,7 @@ async function notifyOtherAdmins(
             messageId,
             undefined,
             notification,
-            { parse_mode: 'HTML' }
+            { parse_mode: 'HTML', ...replyMarkup }
           );
         } else {
           await telegramBotInstance?.telegram.editMessageText(
@@ -369,7 +380,7 @@ async function notifyOtherAdmins(
             messageId,
             undefined,
             notification,
-            { parse_mode: 'HTML' }
+            { parse_mode: 'HTML', ...replyMarkup }
           );
         }
       } catch (error) {
@@ -403,6 +414,16 @@ async function notifyOtherAdmins(
       );
     }
 
+    const showRecallButton = action === 'approved';
+    const components: ActionRowBuilder<ButtonBuilder>[] = showRecallButton
+      ? [new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`recall_${approval.id}`)
+            .setLabel('↩ 撤回')
+            .setStyle(ButtonStyle.Danger)
+        )]
+      : [];
+
     for (const [channelId, messageId] of approval.discordMessageIds) {
       try {
         const channel = await discordClientInstance.channels.fetch(channelId);
@@ -412,7 +433,7 @@ async function notifyOtherAdmins(
           const files = existingAttachment
             ? [{ attachment: existingAttachment.url, name: `tweet_${tweet.id}.png` }]
             : undefined;
-          await message.edit({ embeds: [embed], components: [], files });
+          await message.edit({ embeds: [embed], components, files });
         }
       } catch (error) {
         console.warn(`Failed to notify Discord channel ${channelId}:`, error);
@@ -537,9 +558,8 @@ export async function handleTelegramApproval(ctx: Context): Promise<void> {
   } else {
     await notifyOtherAdmins(pending, adminName, 'rejected');
     console.log(`Rejected by ${adminName} (Telegram) [${pending.groupName}]: ${approvalId}`);
+    pendingApprovals.delete(approvalId);
   }
-
-  pendingApprovals.delete(approvalId);
 }
 
 export async function handleDiscordApproval(interaction: ButtonInteraction): Promise<void> {
@@ -619,13 +639,279 @@ async function handleDiscordApprovalImpl(interaction: ButtonInteraction): Promis
   } else {
     await notifyOtherAdmins(pending, adminName, 'rejected');
     console.log(`Rejected by ${adminName} (Discord) [${pending.groupName}]: ${approvalId}`);
+    pendingApprovals.delete(approvalId);
   }
-
-  pendingApprovals.delete(approvalId);
 }
 
 export function getPendingCount(): number {
   return pendingApprovals.size;
+}
+
+export async function handleRecallCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  try {
+    const messageId = interaction.options.get('message_id')?.value as string | undefined;
+
+    if (messageId) {
+      const deleted = await recallMessageById(messageId);
+
+      if (deleted) {
+        await interaction.reply({
+          content: `已撤回消息 ${messageId}`,
+          flags: MessageFlags.Ephemeral,
+        });
+      } else {
+        await interaction.reply({
+          content: `未找到消息 ${messageId}，或该消息不是 bot 发送的`,
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+      return;
+    }
+
+    const count = (interaction.options.get('count')?.value as number) || 5;
+
+    const deleted = await recallMessages(interaction.channelId, Math.min(count, 20));
+
+    await interaction.reply({
+      content: `已尝试撤回最近 ${count} 条消息，成功撤回 ${deleted} 条`,
+      flags: MessageFlags.Ephemeral,
+    });
+  } catch (error) {
+    console.error('Recall command error:', error);
+    try {
+      await interaction.reply({
+        content: '撤回失败: 内部错误',
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch {}
+  }
+}
+
+export async function handleRecallMessageContextMenu(interaction: MessageContextMenuCommandInteraction): Promise<void> {
+  try {
+    const target = interaction.targetMessage;
+
+    if (target.author.id !== interaction.client.user.id) {
+      await interaction.reply({
+        content: '该消息不是 bot 发送的，无法撤回',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await target.delete();
+    deleteSentMessage(target.id);
+
+    await interaction.reply({
+      content: '已撤回该消息',
+      flags: MessageFlags.Ephemeral,
+    });
+  } catch (error) {
+    console.error('Recall context menu error:', error);
+    try {
+      await interaction.reply({
+        content: '撤回失败: 内部错误',
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch {}
+  }
+}
+
+async function recallDispatchedMessages(approvalId: string): Promise<number> {
+  const pending = pendingApprovals.get(approvalId);
+  if (!pending) return 0;
+
+  const groups = getEffectiveGroups();
+  const group = groups.find(g => g.name === pending.groupName);
+
+  const discordChannelIds = new Set<string>();
+  const telegramChatIds = new Set<string>();
+
+  if (group) {
+    if (group.discord?.channelId) discordChannelIds.add(group.discord.channelId);
+    if (group.discord?.r14ChannelId) discordChannelIds.add(group.discord.r14ChannelId);
+    if (group.telegram?.chatId) telegramChatIds.add(group.telegram.chatId);
+    if (group.telegram?.targets) {
+      for (const target of Object.values(group.telegram.targets)) {
+        telegramChatIds.add(target.chatId);
+      }
+    }
+  }
+
+  const tweetId = pending.tweet.id;
+  let deleted = 0;
+
+  const discordRecords = getSentDiscordMessagesByTweetId(tweetId);
+  for (const record of discordRecords) {
+    if (!discordChannelIds.has(record.channel_id)) {
+      continue;
+    }
+    try {
+      if (discordClientInstance) {
+        const channel = await discordClientInstance.channels.fetch(record.channel_id);
+        if (channel && channel.isTextBased()) {
+          const message = await (channel as TextChannel).messages.fetch(record.message_id);
+          await message.delete();
+          deleted++;
+        }
+      }
+      deleteSentMessage(record.message_id);
+    } catch (error) {
+      deleteSentMessage(record.message_id);
+    }
+  }
+
+  const tgRecords = getSentTgMessagesByTweetId(tweetId);
+  if (telegramBotInstance) {
+    for (const record of tgRecords) {
+      if (!telegramChatIds.has(record.chat_id)) {
+        continue;
+      }
+      try {
+        await telegramBotInstance.telegram.deleteMessage(record.chat_id, record.message_id);
+        deleted++;
+        deleteSentTgMessage(record.message_id, record.chat_id);
+      } catch (error) {
+        deleteSentTgMessage(record.message_id, record.chat_id);
+      }
+    }
+  }
+
+  pendingApprovals.delete(approvalId);
+  return deleted;
+}
+
+async function notifyRecallAdmins(approval: PendingApproval, adminName: string, deletedCount: number): Promise<void> {
+  const cfg = getConfig();
+  const hasExplicitGroups = !!(cfg.groups && cfg.groups.length > 0);
+  const groupLabel = hasExplicitGroups ? ` (${escapeHTML(approval.groupName)})` : '';
+
+  if (approval.telegramMessageIds.size > 0 && telegramBotInstance) {
+    for (const [adminId, messageId] of approval.telegramMessageIds) {
+      try {
+        const tweet = approval.tweet;
+        let notice: string;
+        if (approval.hasImage) {
+          notice = [
+            `↩️ <b>撤回成功 — 已删除 ${deletedCount} 条消息${groupLabel}</b>`,
+            '',
+            `<b>@${escapeHTML(tweet.author)}</b> (${escapeHTML(tweet.authorName)})`,
+            `<a href="${tweet.url}">🔗 View on X</a>`,
+            '',
+            `By: ${escapeHTML(adminName)}`,
+            `ID: <code>${approval.id}</code>`,
+          ].join('\n');
+
+          await telegramBotInstance.telegram.editMessageCaption(
+            adminId, messageId, undefined, notice,
+            { parse_mode: 'HTML' }
+          );
+        } else {
+          notice = [
+            `↩️ <b>撤回成功 — 已删除 ${deletedCount} 条消息${groupLabel}</b>`,
+            '',
+            `<b>@${escapeHTML(tweet.author)}</b> (${escapeHTML(tweet.authorName)})`,
+            `<a href="${tweet.url}">🔗 View on X</a>`,
+            '',
+            `By: ${escapeHTML(adminName)}`,
+            `ID: <code>${approval.id}</code>`,
+          ].join('\n');
+
+          await telegramBotInstance.telegram.editMessageText(
+            adminId, messageId, undefined, notice,
+            { parse_mode: 'HTML' }
+          );
+        }
+      } catch (error) {
+        console.warn(`Failed to notify recall to Telegram admin ${adminId}:`, error);
+      }
+    }
+  }
+
+  if (approval.discordMessageIds.size > 0 && discordClientInstance) {
+    const tweet = approval.tweet;
+    const embed = new EmbedBuilder()
+      .setTitle(`↩️ 撤回成功 — 已删除 ${deletedCount} 条消息${groupLabel}`)
+      .setAuthor({
+        name: `@${tweet.author}`,
+        url: `https://x.com/${tweet.author}`,
+        iconURL: `https://unavatar.io/twitter/${tweet.author}`,
+      })
+      .setURL(tweet.url)
+      .addFields(
+        { name: 'By', value: adminName, inline: true },
+        { name: 'ID', value: `\`${approval.id}\``, inline: true },
+      )
+      .setColor('#FFA500');
+
+    for (const [channelId, messageId] of approval.discordMessageIds) {
+      try {
+        const channel = await discordClientInstance.channels.fetch(channelId);
+        if (channel && channel.isTextBased()) {
+          const message = await (channel as TextChannel).messages.fetch(messageId);
+          await message.edit({ embeds: [embed], components: [] });
+        }
+      } catch (error) {
+        console.warn(`Failed to notify recall to Discord channel ${channelId}:`, error);
+      }
+    }
+  }
+}
+
+export async function handleTelegramRecall(ctx: Context): Promise<void> {
+  const callbackQuery = ctx.callbackQuery;
+  if (!callbackQuery || !('data' in callbackQuery)) return;
+
+  const data = callbackQuery.data;
+  if (!data.startsWith('recall_')) return;
+
+  const approvalId = data.replace('recall_', '');
+  const pending = pendingApprovals.get(approvalId);
+
+  if (!pending) {
+    try { await ctx.answerCbQuery('Approval not found or expired'); } catch (e) {}
+    return;
+  }
+
+  if (!pending.approved) {
+    try { await ctx.answerCbQuery('The tweet has not been approved'); } catch (e) {}
+    return;
+  }
+
+  const adminName = getTelegramAdminName(ctx);
+  try { await ctx.answerCbQuery('Recalling...'); } catch (e) {}
+
+  const deleted = await recallDispatchedMessages(approvalId);
+  await notifyRecallAdmins(pending, adminName, deleted);
+  console.log(`Recalled by ${adminName} (Telegram) [${pending.groupName}]: ${approvalId} — deleted ${deleted} messages`);
+}
+
+export async function handleDiscordRecall(interaction: ButtonInteraction): Promise<void> {
+  try {
+    const customId = interaction.customId;
+    if (!customId.startsWith('recall_')) return;
+
+    const approvalId = customId.replace('recall_', '');
+    const pending = pendingApprovals.get(approvalId);
+
+    if (!pending) {
+      await interaction.reply({ content: 'Approval not found or expired', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (!pending.approved) {
+      await interaction.reply({ content: 'The tweet has not been approved', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.deferUpdate();
+    const adminName = getDiscordAdminName(interaction);
+    const deleted = await recallDispatchedMessages(approvalId);
+    await notifyRecallAdmins(pending, adminName, deleted);
+    console.log(`Recalled by ${adminName} (Discord) [${pending.groupName}]: ${approvalId} — deleted ${deleted} messages`);
+  } catch (error) {
+    console.error('Discord recall handler error:', error);
+  }
 }
 
 export function cleanupExpiredApprovals(maxAgeMinutes: number = 60): number {
@@ -651,6 +937,10 @@ export async function sendToAllGroups(tweet: ProcessedTweet): Promise<void> {
   for (const group of groups) {
     if (group.blockedUsers?.includes(tweet.author)) {
       console.log(`Skipping group ${group.name}: blocked user @${tweet.author}`);
+      continue;
+    }
+
+    if (group.users && group.users.length > 0 && !group.users.some(u => u.username === tweet.author)) {
       continue;
     }
 

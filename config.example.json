@@ -73,5 +73,16 @@
   "imageCacheTtlMinutes": 60,
   "pollIntervalMinutes": 5,
   "maxPostsPerFetch": 20,
-  "maxTweetAgeMinutes": 60
+  "maxTweetAgeMinutes": 60,
+  "_groups_mode_example": {
+    "note": "When groups are defined, each group has its own users. Remove the top-level users when using groups.",
+    "groups": [{
+      "name": "my-group",
+      "users": [
+        { "username": "elonmusk", "displayName": "Elon", "filters": {} }
+      ],
+      "discord": { "channelId": "1234567890" },
+      "telegram": { "chatId": "-100123456" }
+    }]
+  }
 }

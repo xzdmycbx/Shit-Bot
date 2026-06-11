@@ -110,6 +110,7 @@ export interface GroupApprovalConfig {
 
 export interface GroupConfig {
   name: string;
+  users?: UserConfig[];
   telegram?: GroupTelegramConfig;
   discord?: GroupDiscordConfig;
   approval?: GroupApprovalConfig;

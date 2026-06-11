@@ -1,6 +1,6 @@
 import { TwitterOpenApi, TwitterOpenApiClient } from 'twitter-openapi-typescript';
 import { TweetApiUtilsData, UserApiUtilsData } from 'twitter-openapi-typescript/dist/src/models';
-import { getConfig } from '../config';
+import { getConfig, getEffectiveGroups } from '../config';
 import { Tweet, UserConfig } from '../types';
 
 let client: TwitterOpenApiClient | null = null;
@@ -158,15 +158,25 @@ export async function fetchTweetsForUser(userConfig: UserConfig): Promise<Tweet[
 }
 
 export async function fetchAllTweets(): Promise<Map<string, Tweet[]>> {
-  const config = getConfig();
+  const groups = getEffectiveGroups();
+  const uniqueUsers = new Map<string, UserConfig>();
+
+  for (const g of groups) {
+    for (const u of (g.users || [])) {
+      if (!uniqueUsers.has(u.username)) {
+        uniqueUsers.set(u.username, u);
+      }
+    }
+  }
+
   const results = new Map<string, Tweet[]>();
 
-  for (const user of config.users) {
+  for (const [username, user] of uniqueUsers) {
     const tweets = await fetchTweetsForUser(user);
-    results.set(user.username, tweets);
+    results.set(username, tweets);
 
     if (tweets.length > 0) {
-      console.log(`Fetched ${tweets.length} tweets from @${user.username}`);
+      console.log(`Fetched ${tweets.length} tweets from @${username}`);
     }
   }
 

@@ -788,6 +788,7 @@ const messages = {
     addedGroup: 'Added group', removedGroup: 'Removed group', updatedGroup: 'Updated group',
     addTargetEntry: 'Add target...', addBlockedUser: 'Add username...',
     groupTelegram: 'Group Telegram', groupDiscord: 'Group Discord', groupApproval: 'Approval Settings',
+    groupUsers: 'Monitored Users', usersInGroups: 'Users are managed in the Groups tab. Add/remove users per group.',
   },
   'zh-CN': {
     menu: '菜单', users: '用户', discord: 'Discord', telegram: 'Telegram', twitter: 'Twitter/X', settings: '设置', log: '日志',
@@ -831,6 +832,7 @@ const messages = {
     addedGroup: '已添加分组', removedGroup: '已删除分组', updatedGroup: '已更新分组',
     addTargetEntry: '添加目标...', addBlockedUser: '添加用户名...',
     groupTelegram: '分组 Telegram', groupDiscord: '分组 Discord', groupApproval: '审批设置',
+    groupUsers: '监听用户', usersInGroups: '用户在分组 Tab 中管理。按分组添加/删除用户。',
   }
 };
 
@@ -1054,6 +1056,36 @@ async function removeUser(username) {
 }
 
 function renderUsers() {
+  const groups = config.groups;
+  const hasGroups = !!(groups && groups.length > 0);
+
+  if (hasGroups) {
+    let h = '<p style="color:var(--text-dim);margin-bottom:16px">' + t('usersInGroups') + '</p>';
+    groups.forEach(g => {
+      const groupUsers = g.users || [];
+      if (!groupUsers.length) return;
+      h += '<div class="user-card" style="margin-bottom:12px"><div class="user-card-top"><span style="font-weight:600">📦 ' + g.name + '</span></div>';
+      groupUsers.forEach(u => {
+        const f = u.filters || {}, kw = f.keywords || {}, med = f.media || {};
+        h += '<div class="user-card" style="margin:6px 0;padding:8px;border:1px solid var(--border)"><div class="user-card-top">';
+        h += '<div class="user-info">' + avatarHTML(u.username, u.displayName);
+        h += '<span class="user-name">' + (u.displayName || u.username) + '</span>';
+        h += '<span class="user-handle">@' + u.username + '</span></div></div>';
+        h += '<div class="user-tags">';
+        if (kw.include && kw.include.length) h += '<span class="ftag on">+ ' + kw.include.join(', ') + '</span>';
+        if (kw.exclude && kw.exclude.length) h += '<span class="ftag">− ' + kw.exclude.join(', ') + '</span>';
+        h += '<span class="ftag ' + (med.requireMedia ? 'on' : '') + '">' + (med.requireMedia ? t('mediaOnly') : t('anyPost')) + '</span>';
+        h += '<span class="ftag ' + (f.excludeRetweets ? 'on' : '') + '">' + (f.excludeRetweets ? t('noRT') : t('withRT')) + '</span>';
+        h += '<span class="ftag ' + (f.excludeReplies ? 'on' : '') + '">' + (f.excludeReplies ? t('noReplies') : t('withReplies')) + '</span>';
+        h += '</div></div>';
+      });
+      h += '</div>';
+    });
+    if (h.indexOf('user-card') === -1) h += '<div class="empty"><div class="empty-icon">👤</div><p>' + t('noUsers') + '</p></div>';
+    $('#tab-users').innerHTML = h;
+    return;
+  }
+
   let h = '<div class="add-bar">';
   h += '<div class="field"><label>' + t('username') + '</label><input id="new-username" placeholder="' + t('phHandle') + '"></div>';
   h += '<div class="field"><label>' + t('displayName') + '</label><input id="new-display" placeholder="' + t('phName') + '"></div>';
@@ -1221,6 +1253,7 @@ async function removeGroup(gname) {
 }
 
 async function saveGroup(gname) {
+  const userNames = getChips('grp_users_' + gname);
   const telChatId = document.getElementById('grp_tg_' + gname)?.value?.trim() || '';
   const dcChanId = document.getElementById('grp_dc_' + gname)?.value?.trim() || '';
   const dcR14 = document.getElementById('grp_dcr14_' + gname)?.value?.trim() || '';
@@ -1240,9 +1273,13 @@ async function saveGroup(gname) {
   });
 
   const group = {};
+  if (userNames.length > 0) {
+    group.users = userNames.map(u => ({ username: u.trim(), displayName: u.trim(), filters: {} }));
+  }
   if (telChatId) group.telegram = { chatId: telChatId, targets: Object.keys(targets).length > 0 ? targets : undefined };
   else group.telegram = undefined;
   if (dcChanId || dcR14) group.discord = { channelId: dcChanId || '', r14ChannelId: dcR14 || '' };
+  else group.discord = undefined;
   else group.discord = undefined;
   if (approvalTgAdminIds.length > 0 || approvalDcChan || approvalDcRole) {
     group.approval = {};
@@ -1274,6 +1311,7 @@ function renderGroups() {
       const dc = g.discord;
       const ap = g.approval;
       const bl = g.blockedUsers || [];
+      const groupUsers = g.users || [];
       const tgTargets = tg?.targets ? Object.entries(tg.targets).map(([tag, t]) => tag + ': ' + t.chatId) : [];
 
       h += '<div class="user-card">';
@@ -1283,7 +1321,12 @@ function renderGroups() {
       h += '</div>';
 
       h += '<div class="user-filters-box" style="margin-left:0">';
-      h += '<div class="card-title" style="margin-bottom:12px;padding-bottom:8px">' + t('groupTelegram') + '</div>';
+      h += '<div class="card-title" style="margin-bottom:12px;padding-bottom:8px">' + t('groupUsers') + '</div>';
+      h += '<div class="field"><div class="chip-array" id="grp_users_' + g.name + '">';
+      groupUsers.forEach(u => h += chipHTML(u.username));
+      h += '<input onkeydown="addChip(event, this, \'grp_users_' + g.name + '\')" placeholder="@username">';
+      h += '</div></div>';
+      h += '<div class="card-title" style="margin:14px 0 12px;padding-bottom:8px">' + t('groupTelegram') + '</div>';
       h += '<div class="field-row">';
       h += '<div class="field"><label>' + t('tgChatId') + '</label><input id="grp_tg_' + g.name + '" value="' + (tg?.chatId || '') + '"></div>';
       h += '<div class="field"><label>' + t('tgTargets') + '</label><div class="chip-array" id="grp_targets_' + g.name + '">';

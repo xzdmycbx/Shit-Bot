@@ -103,11 +103,18 @@ export function loadConfig(configPath?: string): AppConfig {
 }
 
 function validateConfig(cfg: AppConfig): void {
-  if (!cfg.users || cfg.users.length === 0) {
-    throw new Error('No users configured to monitor');
-  }
-
   const hasGroups = !!(cfg.groups && cfg.groups.length > 0);
+
+  if (hasGroups) {
+    const allGroupUsers = cfg.groups!.flatMap(g => g.users || []);
+    if (allGroupUsers.length === 0) {
+      throw new Error('At least one group must have users configured to monitor');
+    }
+  } else {
+    if (!cfg.users || cfg.users.length === 0) {
+      throw new Error('No users configured to monitor');
+    }
+  }
 
   if (cfg.discord.enabled) {
     if (!cfg.discord.token) {
@@ -202,6 +209,7 @@ export function getEffectiveGroups(): GroupConfig[] {
 
   const groups: GroupConfig[] = [{
     name: 'default',
+    users: cfg.users,
     telegram: cfg.telegram.enabled ? {
       chatId: cfg.telegram.chatId,
       targets: cfg.telegram.targets,
@@ -218,6 +226,47 @@ export function getEffectiveGroups(): GroupConfig[] {
   }];
 
   return groups;
+}
+
+export function getAllMonitoredUsers(): Array<{ username: string; groups: string[] }> {
+  const groups = getEffectiveGroups();
+  const userMap = new Map<string, Set<string>>();
+
+  for (const g of groups) {
+    const users = g.users || [];
+    for (const u of users) {
+      if (!userMap.has(u.username)) {
+        userMap.set(u.username, new Set());
+      }
+      userMap.get(u.username)!.add(g.name);
+    }
+  }
+
+  return Array.from(userMap.entries()).map(([username, groupSet]) => ({
+    username,
+    groups: Array.from(groupSet),
+  }));
+}
+
+export function getGroupNamesForUser(username: string): string[] {
+  const groups = getEffectiveGroups();
+  const names: string[] = [];
+
+  for (const g of groups) {
+    const users = g.users || [];
+    if (users.some(u => u.username === username)) {
+      names.push(g.name);
+    }
+  }
+
+  return names;
+}
+
+export function isUserInGroup(username: string, groupName: string): boolean {
+  const group = getEffectiveGroups().find(g => g.name === groupName);
+  if (!group) return false;
+  const users = group.users || [];
+  return users.some(u => u.username === username);
 }
 
 export function getConfigPath(): string | null {

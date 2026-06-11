@@ -3,6 +3,7 @@ import { ProcessedTweet } from '../types';
 import { getConfig } from '../config';
 import { formatTweetHTML, escapeHTML } from '../filters';
 import { renderTweetImage } from '../renderer';
+import { storeSentTgMessage } from '../storage';
 
 let bot: Telegraf | null = null;
 
@@ -96,7 +97,7 @@ export async function sendToTelegram(tweet: ProcessedTweet, targetChatId?: strin
     if (mediaSent) return true;
   }
 
-  const textSent = await trySendText(chatId, message, `tweet ${tweet.id}`);
+  const textSent = await trySendText(chatId, message, `tweet ${tweet.id}`, tweet.id);
   if (textSent) return true;
 
   console.error(`Failed to send tweet ${tweet.id} to Telegram after all attempts`);
@@ -113,11 +114,12 @@ async function trySendImage(chatId: string, tweet: ProcessedTweet, message: stri
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      await callWithTimeout(() => bot!.telegram.sendPhoto(
+      const sent = await callWithTimeout(() => bot!.telegram.sendPhoto(
         chatId,
         { source: imageBuffer },
         { caption, parse_mode: 'HTML' }
       ));
+      storeSentTgMessage(chatId, sent.message_id, tweet.id);
       console.log(`Sent tweet ${tweet.id} as image to Telegram (${chatId})`);
       return true;
     } catch (error) {
@@ -137,17 +139,19 @@ async function trySendMedia(chatId: string, tweet: ProcessedTweet, mediaUrl: str
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
+      let sent: any;
       if (isVideo) {
-        await callWithTimeout(() => bot!.telegram.sendVideo(chatId, mediaUrl, {
+        sent = await callWithTimeout(() => bot!.telegram.sendVideo(chatId, mediaUrl, {
           caption: message.substring(0, 1024),
           parse_mode: 'HTML',
         }));
       } else {
-        await callWithTimeout(() => bot!.telegram.sendPhoto(chatId, mediaUrl, {
+        sent = await callWithTimeout(() => bot!.telegram.sendPhoto(chatId, mediaUrl, {
           caption: message.substring(0, 1024),
           parse_mode: 'HTML',
         }));
       }
+      storeSentTgMessage(chatId, sent.message_id, tweet.id);
       console.log(`Sent tweet ${tweet.id} with media to Telegram (${chatId})`);
       return true;
     } catch (error) {
@@ -160,14 +164,17 @@ async function trySendMedia(chatId: string, tweet: ProcessedTweet, mediaUrl: str
   return false;
 }
 
-async function trySendText(chatId: string, message: string, label: string): Promise<boolean> {
+async function trySendText(chatId: string, message: string, label: string, tweetId?: string): Promise<boolean> {
   if (!bot) return false;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      await callWithTimeout(() => bot!.telegram.sendMessage(chatId, message, {
+      const sent = await callWithTimeout(() => bot!.telegram.sendMessage(chatId, message, {
         parse_mode: 'HTML',
       }));
+      if (tweetId) {
+        storeSentTgMessage(chatId, sent.message_id, tweetId);
+      }
       console.log(`Sent ${label} as text to Telegram (${chatId})`);
       return true;
     } catch (error) {

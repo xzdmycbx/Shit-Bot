@@ -1,7 +1,7 @@
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getConfig, saveConfig, reloadConfig } from '../config';
+import { getConfig, saveConfig, reloadConfig, getEffectiveGroups } from '../config';
 import { getRecentTweets, getSentCount } from '../storage';
 import { AppConfig, UserConfig, GroupConfig } from '../types';
 
@@ -241,6 +241,7 @@ async function handleAPI(req: IncomingMessage, res: http.ServerResponse, urlPath
 
       const group: GroupConfig = {
         name: body.name,
+        users: body.users || [],
         telegram: body.telegram,
         discord: body.discord,
         approval: body.approval,
@@ -296,6 +297,7 @@ async function handleAPI(req: IncomingMessage, res: http.ServerResponse, urlPath
       if (body.discord !== undefined) group.discord = body.discord;
       if (body.approval !== undefined) group.approval = body.approval;
       if (body.blockedUsers !== undefined) group.blockedUsers = body.blockedUsers;
+      if (body.users !== undefined) group.users = body.users;
 
       saveConfig(cfg);
       sendJSON(res, { success: true, group });
@@ -312,8 +314,15 @@ async function handleAPI(req: IncomingMessage, res: http.ServerResponse, urlPath
 
     if (req.method === 'GET' && urlPath === '/api/stats') {
       const cfg = getConfig();
+      const groups = getEffectiveGroups();
+      const uniqueUsers = new Set<string>();
+      for (const g of groups) {
+        for (const u of (g.users || [])) {
+          uniqueUsers.add(u.username);
+        }
+      }
       sendJSON(res, {
-        userCount: cfg.users.length,
+        userCount: uniqueUsers.size,
         sentCount: getSentCount(),
         pollInterval: cfg.pollIntervalMinutes,
         discordEnabled: cfg.discord.enabled,

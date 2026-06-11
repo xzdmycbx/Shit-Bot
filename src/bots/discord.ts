@@ -1,8 +1,9 @@
-import { Client, GatewayIntentBits, TextChannel, EmbedBuilder, AttachmentBuilder } from 'discord.js';
+import { Client, GatewayIntentBits, TextChannel, EmbedBuilder, AttachmentBuilder, Message, REST, Routes } from 'discord.js';
 import { ProcessedTweet } from '../types';
 import { getConfig } from '../config';
 import { formatContentForPlatform } from '../filters';
 import { renderTweetImage } from '../renderer';
+import { storeSentMessage, getRecentSentMessages, deleteSentMessage, getSentMessageByMessageId } from '../storage';
 
 let client: Client | null = null;
 let targetChannel: TextChannel | null = null;
@@ -46,13 +47,13 @@ export async function initDiscord(): Promise<boolean> {
   }
 }
 
-export async function sendToDiscord(tweet: ProcessedTweet, channelId?: string, asImage?: boolean, preRenderedImage?: Buffer): Promise<boolean> {
+export async function sendToDiscord(tweet: ProcessedTweet, channelId?: string, asImage?: boolean, preRenderedImage?: Buffer): Promise<Message | null> {
   const config = getConfig();
   const sendImage = asImage ?? config.sendAsImage;
 
   if (!client) {
     console.error('Discord not initialized');
-    return false;
+    return null;
   }
 
   let sendTo: TextChannel | null = null;
@@ -72,10 +73,12 @@ export async function sendToDiscord(tweet: ProcessedTweet, channelId?: string, a
 
   if (!sendTo) {
     console.error(`Discord channel not available${channelId ? ` for ${channelId}` : ''}`);
-    return false;
+    return null;
   }
 
   try {
+    let sentMessage: Message;
+
     if (sendImage) {
       const imageBuffer = preRenderedImage || await renderTweetImage(tweet);
       if (imageBuffer) {
@@ -88,9 +91,10 @@ export async function sendToDiscord(tweet: ProcessedTweet, channelId?: string, a
           .setColor((config.discord.embedColor || '#1DA1F2') as `#${string}`)
           .setTimestamp(tweet.publishedAt);
 
-        await sendTo.send({ embeds: [embed], files: [attachment] });
+        sentMessage = await sendTo.send({ embeds: [embed], files: [attachment] });
+        storeSentMessage(sendTo.id, sentMessage.id, tweet.id);
         console.log(`Sent tweet ${tweet.id} as image to Discord${channelId ? ` (${channelId})` : ''}`);
-        return true;
+        return sentMessage;
       }
     }
 
@@ -107,12 +111,13 @@ export async function sendToDiscord(tweet: ProcessedTweet, channelId?: string, a
 
     embed.setFooter({ text: `${tweet.mediaUrls.length} media attachment(s)` });
 
-    await sendTo.send({ embeds: [embed] });
+    sentMessage = await sendTo.send({ embeds: [embed] });
+    storeSentMessage(sendTo.id, sentMessage.id, tweet.id);
     console.log(`Sent tweet ${tweet.id} to Discord${channelId ? ` (${channelId})` : ''}`);
-    return true;
+    return sentMessage;
   } catch (error) {
     console.error(`Failed to send tweet ${tweet.id} to Discord:`, error);
-    return false;
+    return null;
   }
 }
 
@@ -120,8 +125,8 @@ export async function sendBatchToDiscord(tweets: ProcessedTweet[]): Promise<numb
   let sent = 0;
 
   for (const tweet of tweets) {
-    const success = await sendToDiscord(tweet);
-    if (success) {
+    const msg = await sendToDiscord(tweet);
+    if (msg) {
       sent++;
     }
     
@@ -129,6 +134,104 @@ export async function sendBatchToDiscord(tweets: ProcessedTweet[]): Promise<numb
   }
 
   return sent;
+}
+
+export async function recallMessages(channelId: string, count: number): Promise<number> {
+  if (!client) return 0;
+
+  const records = getRecentSentMessages(channelId, count);
+  let deleted = 0;
+
+  for (const record of records) {
+    try {
+      const channel = await client.channels.fetch(record.channel_id);
+      if (channel && channel.isTextBased()) {
+        const message = await (channel as TextChannel).messages.fetch(record.message_id);
+        await message.delete();
+        deleteSentMessage(record.message_id);
+        deleted++;
+      }
+    } catch (error) {
+      deleteSentMessage(record.message_id);
+    }
+  }
+
+  return deleted;
+}
+
+export async function recallMessageById(messageId: string): Promise<boolean> {
+  if (!client) return false;
+
+  const record = getSentMessageByMessageId(messageId);
+
+  if (record) {
+    try {
+      const channel = await client.channels.fetch(record.channel_id);
+      if (channel && channel.isTextBased()) {
+        const message = await (channel as TextChannel).messages.fetch(messageId);
+        await message.delete();
+        deleteSentMessage(messageId);
+        return true;
+      }
+    } catch {}
+    deleteSentMessage(messageId);
+    return false;
+  }
+
+  for (const [, channel] of client.channels.cache) {
+    if (!channel.isTextBased()) continue;
+    try {
+      const message = await (channel as TextChannel).messages.fetch(messageId);
+      if (message.author.id === client.user?.id) {
+        await message.delete();
+        return true;
+      }
+    } catch {}
+  }
+
+  return false;
+}
+
+export async function registerDiscordCommands(): Promise<void> {
+  if (!client) return;
+
+  try {
+    const rest = new REST({ version: '10' }).setToken(getConfig().discord.token);
+
+    const commands = [
+      {
+        name: 'recall',
+        description: '撤回 bot 发送的消息',
+        options: [
+          {
+            name: 'count',
+            description: '撤回最近 N 条消息 (默认 5)',
+            type: 4,
+            required: false,
+          },
+          {
+            name: 'message_id',
+            description: '指定要撤回的消息 ID',
+            type: 3,
+            required: false,
+          },
+        ],
+      },
+      {
+        name: '撤回消息',
+        type: 3,
+      },
+    ];
+
+    await rest.put(
+      Routes.applicationCommands(client.user!.id),
+      { body: commands }
+    );
+
+    console.log('Discord slash commands registered');
+  } catch (error) {
+    console.error('Failed to register Discord commands:', error);
+  }
 }
 
 export async function shutdownDiscord(): Promise<void> {
