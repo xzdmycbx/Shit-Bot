@@ -429,11 +429,7 @@ async function notifyOtherAdmins(
         const channel = await discordClientInstance.channels.fetch(channelId);
         if (channel && channel.isTextBased()) {
           const message = await (channel as TextChannel).messages.fetch(messageId);
-          const existingAttachment = approval.hasImage ? message.attachments.first() : undefined;
-          const files = existingAttachment
-            ? [{ attachment: existingAttachment.url, name: `tweet_${tweet.id}.png` }]
-            : undefined;
-          await message.edit({ embeds: [embed], components, files });
+          await message.edit({ embeds: [embed], components });
         }
       } catch (error) {
         console.warn(`Failed to notify Discord channel ${channelId}:`, error);

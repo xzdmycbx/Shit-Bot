@@ -594,54 +594,7 @@
   .ftag.on { color: var(--green); background: var(--green-soft); border-color: rgba(0,230,118,0.2); }
   .ftag.off { color: var(--red); background: var(--red-soft); border-color: rgba(255,77,106,0.2); }
 
-/* ── User filters ────────────────── */
-
-function toggleUserFilters(username) {
-  const uid = 'u_' + username.replace(/[^a-zA-Z0-9]/g, '_');
-  const el = document.getElementById(uid + '_box');
-  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
-}
-
-async function saveUserFilters(username) {
-  const uid = 'u_' + username.replace(/[^a-zA-Z0-9]/g, '_');
-  const filters = {
-    keywords: {
-      include: getChips(uid + '_inc'),
-      exclude: getChips(uid + '_exc'),
-    },
-    media: { requireMedia: !!document.getElementById(uid + '_med')?.checked },
-    excludeRetweets: !!document.getElementById(uid + '_rt')?.checked,
-    excludeReplies: !!document.getElementById(uid + '_reply')?.checked,
-  };
-
-  const groups = config.groups || [];
-  let updated = 0;
-
-  for (const g of groups) {
-    const users = g.users || [];
-    const idx = users.findIndex(u => u.username === username);
-    if (idx === -1) continue;
-
-    const updatedUsers = users.map((u, i) => {
-      if (i === idx) return { ...u, filters };
-      return u;
-    });
-
-    await api('/api/groups/' + g.name, 'PUT', { users: updatedUsers });
-    updated++;
-  }
-
-  if (updated > 0) {
-    toast(t('updatedUser') + username);
-    await loadConfig();
-  } else {
-    toast('User not found in any group', 'error');
-  }
-}
-
-/* ── Config cards ───────────────── */
-
-  .cards-grid {
+  /* ── Cards ─────────────────────── */
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 12px;
@@ -1266,6 +1219,55 @@ function renderUsers() {
 
   h += '</div>';
   $('#tab-users').innerHTML = h;
+}
+
+/* ── User filters ────────────────── */
+
+function toggleUserFilters(username) {
+  const uid = 'u_' + username.replace(/[^a-zA-Z0-9]/g, '_');
+  const el = document.getElementById(uid + '_box');
+  if (el) {
+    el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  } else {
+    console.warn('Filter box not found for id:', uid + '_box');
+  }
+}
+
+async function saveUserFilters(username) {
+  const uid = 'u_' + username.replace(/[^a-zA-Z0-9]/g, '_');
+  const filters = {
+    keywords: {
+      include: getChips(uid + '_inc'),
+      exclude: getChips(uid + '_exc'),
+    },
+    media: { requireMedia: !!document.getElementById(uid + '_med')?.checked },
+    excludeRetweets: !!document.getElementById(uid + '_rt')?.checked,
+    excludeReplies: !!document.getElementById(uid + '_reply')?.checked,
+  };
+
+  const groups = config.groups || [];
+  let updated = 0;
+
+  for (const g of groups) {
+    const users = g.users || [];
+    const idx = users.findIndex(u => u.username === username);
+    if (idx === -1) continue;
+
+    const updatedUsers = users.map((u, i) => {
+      if (i === idx) return { ...u, filters };
+      return u;
+    });
+
+    await api('/api/groups/' + g.name, 'PUT', { users: updatedUsers });
+    updated++;
+  }
+
+  if (updated > 0) {
+    toast(t('updatedUser') + username);
+    await loadConfig();
+  } else {
+    toast('User not found in any group', 'error');
+  }
 }
 
 /* ── Config cards ───────────────── */
