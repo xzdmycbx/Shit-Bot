@@ -190,7 +190,7 @@ export async function registerDiscordCommands(): Promise<void> {
     const commands = [
       {
         name: 'recall',
-        description: '撤回 bot 发送的消息',
+        description: '撤回 bot 发送的消息 (需要审批权限)',
         options: [
           {
             name: 'count',
@@ -201,6 +201,12 @@ export async function registerDiscordCommands(): Promise<void> {
           {
             name: 'message_id',
             description: '指定要撤回的消息 ID',
+            type: 3,
+            required: false,
+          },
+          {
+            name: 'link',
+            description: '指定要撤回的消息链接',
             type: 3,
             required: false,
           },

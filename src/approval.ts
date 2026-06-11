@@ -647,31 +647,75 @@ export function getPendingCount(): number {
   return pendingApprovals.size;
 }
 
+function checkRecallPermission(interaction: ButtonInteraction | ChatInputCommandInteraction | MessageContextMenuCommandInteraction): boolean {
+  const config = getConfig();
+  const member = interaction.member;
+  if (!member || !('roles' in member)) return false;
+
+  const approveRoleIds = new Set<string>();
+  const groups = getEffectiveGroups();
+  for (const g of groups) {
+    if (g.approval?.discordApproveRoleId) {
+      approveRoleIds.add(g.approval.discordApproveRoleId);
+    }
+  }
+  if (config.discord.approveRoleId) {
+    approveRoleIds.add(config.discord.approveRoleId);
+  }
+
+  if (approveRoleIds.size === 0) return true;
+
+  const roles = (member as any).roles;
+  if (roles.cache) {
+    for (const id of approveRoleIds) {
+      if (roles.cache.has(id)) return true;
+    }
+    return false;
+  }
+
+  if (Array.isArray(roles)) {
+    return roles.some((r: string) => approveRoleIds.has(r));
+  }
+
+  return false;
+}
+
 export async function handleRecallCommand(interaction: ChatInputCommandInteraction): Promise<void> {
   try {
+    if (!checkRecallPermission(interaction)) {
+      await interaction.reply({ content: '❌ 你没有撤回权限', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
     const messageId = interaction.options.get('message_id')?.value as string | undefined;
+    const link = interaction.options.get('link')?.value as string | undefined;
 
     if (messageId) {
       const deleted = await recallMessageById(messageId);
+      await interaction.reply({
+        content: deleted ? `已撤回消息 ${messageId}` : `未找到消息 ${messageId}，或该消息不是 bot 发送的`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
 
-      if (deleted) {
-        await interaction.reply({
-          content: `已撤回消息 ${messageId}`,
-          flags: MessageFlags.Ephemeral,
-        });
-      } else {
-        await interaction.reply({
-          content: `未找到消息 ${messageId}，或该消息不是 bot 发送的`,
-          flags: MessageFlags.Ephemeral,
-        });
+    if (link) {
+      const match = link.match(/discord\.com\/channels\/\d+\/(\d+)\/(\d+)/);
+      if (!match) {
+        await interaction.reply({ content: '无效的消息链接', flags: MessageFlags.Ephemeral });
+        return;
       }
+      const linkMsgId = match[2];
+      const deleted = await recallMessageById(linkMsgId);
+      await interaction.reply({
+        content: deleted ? `已撤回消息 ${linkMsgId}` : `未找到消息 ${linkMsgId}，或该消息不是 bot 发送的`,
+        flags: MessageFlags.Ephemeral,
+      });
       return;
     }
 
     const count = (interaction.options.get('count')?.value as number) || 5;
-
     const deleted = await recallMessages(interaction.channelId, Math.min(count, 20));
-
     await interaction.reply({
       content: `已尝试撤回最近 ${count} 条消息，成功撤回 ${deleted} 条`,
       flags: MessageFlags.Ephemeral,
@@ -679,40 +723,31 @@ export async function handleRecallCommand(interaction: ChatInputCommandInteracti
   } catch (error) {
     console.error('Recall command error:', error);
     try {
-      await interaction.reply({
-        content: '撤回失败: 内部错误',
-        flags: MessageFlags.Ephemeral,
-      });
+      await interaction.reply({ content: '撤回失败: 内部错误', flags: MessageFlags.Ephemeral });
     } catch {}
   }
 }
 
 export async function handleRecallMessageContextMenu(interaction: MessageContextMenuCommandInteraction): Promise<void> {
   try {
-    const target = interaction.targetMessage;
+    if (!checkRecallPermission(interaction)) {
+      await interaction.reply({ content: '❌ 你没有撤回权限', flags: MessageFlags.Ephemeral });
+      return;
+    }
 
+    const target = interaction.targetMessage;
     if (target.author.id !== interaction.client.user.id) {
-      await interaction.reply({
-        content: '该消息不是 bot 发送的，无法撤回',
-        flags: MessageFlags.Ephemeral,
-      });
+      await interaction.reply({ content: '该消息不是 bot 发送的，无法撤回', flags: MessageFlags.Ephemeral });
       return;
     }
 
     await target.delete();
     deleteSentMessage(target.id);
-
-    await interaction.reply({
-      content: '已撤回该消息',
-      flags: MessageFlags.Ephemeral,
-    });
+    await interaction.reply({ content: '已撤回该消息', flags: MessageFlags.Ephemeral });
   } catch (error) {
     console.error('Recall context menu error:', error);
     try {
-      await interaction.reply({
-        content: '撤回失败: 内部错误',
-        flags: MessageFlags.Ephemeral,
-      });
+      await interaction.reply({ content: '撤回失败: 内部错误', flags: MessageFlags.Ephemeral });
     } catch {}
   }
 }
