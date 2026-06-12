@@ -6,7 +6,7 @@ import { filterTweets, getPassedTweets } from './filters';
 import { initDiscord, shutdownDiscord, getDiscordClient, registerDiscordCommands } from './bots/discord';
 import { initTelegram, shutdownTelegram, getTelegramBot } from './bots/telegram';
 import { initDatabase, closeDatabase, markMultipleAsSent, cleanupOldRecords, cleanupExpiredImages, cleanupOldSentMessages, cleanupOldSentTgMessages } from './storage';
-import { sendForApproval, sendToAllGroups, handleTelegramApproval, handleDiscordApproval, setTelegramBot, setDiscordClient, handleRecallCommand, handleRecallMessageContextMenu, handleTelegramRecall, handleDiscordRecall } from './approval';
+import { sendForApproval, sendToAllGroups, handleTelegramApproval, handleDiscordApproval, setTelegramBot, setDiscordClient, handleRecallCommand, handleRecallMessageContextMenu, handleTelegramRecall, handleDiscordRecall, rehydratePendingApprovals, cleanupExpiredApprovals } from './approval';
 import { initRenderer, shutdownRenderer } from './renderer';
 import { initTwitterClient, loginWithCredentials } from './twitter';
 import { startWebServer } from './web/server';
@@ -73,6 +73,7 @@ async function pollAndSend(): Promise<void> {
     console.log(`\n[${new Date().toISOString()}] Starting poll...`);
 
     cleanupExpiredImages(getConfig().imageCacheTtlMinutes);
+    cleanupExpiredApprovals(60);
     cleanupOldSentMessages(7);
     cleanupOldSentTgMessages(7);
 
@@ -107,6 +108,7 @@ async function start(): Promise<void> {
   }
 
   initDatabase();
+  rehydratePendingApprovals();
 
   const config = getConfig();
 

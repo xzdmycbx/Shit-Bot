@@ -71,6 +71,33 @@ export function initDatabase(): void {
   db.run('CREATE INDEX IF NOT EXISTS idx_sent_tg_messages_chat ON sent_tg_messages(chat_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_sent_tg_messages_tweet_id ON sent_tg_messages(tweet_id)');
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS pending_approvals (
+      approval_id TEXT PRIMARY KEY,
+      group_name TEXT NOT NULL,
+      tweet_json TEXT NOT NULL,
+      telegram_msg_ids TEXT NOT NULL DEFAULT '{}',
+      discord_msg_ids TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL,
+      approved INTEGER NOT NULL DEFAULT 0,
+      approved_by TEXT,
+      sent_to TEXT,
+      has_image INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS dead_letters (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tweet_id TEXT NOT NULL,
+      target_label TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      error_message TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    )
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_dead_letters_tweet_id ON dead_letters(tweet_id)');
+
   console.log(`Database initialized: ${DB_PATH}`);
 }
 
@@ -256,6 +283,77 @@ export function cleanupOldSentTgMessages(maxAgeDays: number = 7): number {
   const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
   const result = database.run('DELETE FROM sent_tg_messages WHERE sent_at < ?', [cutoff]);
   return result.changes;
+}
+
+export interface PersistedApproval {
+  approvalId: string;
+  groupName: string;
+  tweetJson: string;
+  telegramMsgIds: string;
+  discordMsgIds: string;
+  createdAt: number;
+  approved: number;
+  approvedBy: string | null;
+  sentTo: string | null;
+  hasImage: number;
+}
+
+export function storePendingApproval(approval: {
+  approvalId: string;
+  groupName: string;
+  tweetJson: string;
+  telegramMsgIds: Record<string, number>;
+  discordMsgIds: Record<string, string>;
+  createdAt: Date;
+  approved: boolean;
+  hasImage: boolean;
+}): void {
+  const database = getDatabase();
+  database.run(
+    `INSERT OR REPLACE INTO pending_approvals (approval_id, group_name, tweet_json, telegram_msg_ids, discord_msg_ids, created_at, approved, has_image)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      approval.approvalId,
+      approval.groupName,
+      approval.tweetJson,
+      JSON.stringify(approval.telegramMsgIds),
+      JSON.stringify(approval.discordMsgIds),
+      approval.createdAt.getTime(),
+      approval.approved ? 1 : 0,
+      approval.hasImage ? 1 : 0,
+    ]
+  );
+}
+
+export function markApprovalDone(approvalId: string, approvedBy?: string, sentTo?: string): void {
+  const database = getDatabase();
+  database.run(
+    `UPDATE pending_approvals SET approved = 1, approved_by = ?, sent_to = ? WHERE approval_id = ?`,
+    [approvedBy || null, sentTo || null, approvalId]
+  );
+}
+
+export function deletePendingApproval(approvalId: string): void {
+  const database = getDatabase();
+  database.run('DELETE FROM pending_approvals WHERE approval_id = ?', [approvalId]);
+}
+
+export function getAllPendingApprovals(): PersistedApproval[] {
+  const database = getDatabase();
+  return database.query('SELECT * FROM pending_approvals WHERE approved = 0').all() as PersistedApproval[];
+}
+
+export function getPendingApproval(approvalId: string): PersistedApproval | null {
+  const database = getDatabase();
+  return (database.query('SELECT * FROM pending_approvals WHERE approval_id = ?').get(approvalId) as PersistedApproval) || null;
+}
+
+export function storeDeadLetter(tweetId: string, targetLabel: string, targetId: string, errorMessage: string): void {
+  const database = getDatabase();
+  database.run(
+    `INSERT INTO dead_letters (tweet_id, target_label, target_id, error_message, created_at) VALUES (?, ?, ?, ?, ?)`,
+    [tweetId, targetLabel, targetId, errorMessage, Date.now()]
+  );
 }
 
 export function closeDatabase(): void {

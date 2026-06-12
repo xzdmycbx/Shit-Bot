@@ -5,7 +5,7 @@ import { getConfig, getEffectiveGroups } from './config';
 import { formatTweetHTML, escapeHTML, formatContentForPlatform } from './filters';
 import { sendToTelegram } from './bots/telegram';
 import { sendToDiscord, recallMessages, recallMessageById } from './bots/discord';
-import { markAsSent, cacheImage, getCachedImage, getSentDiscordMessagesByTweetId, getSentTgMessagesByTweetId, deleteSentMessage, deleteSentTgMessage } from './storage';
+import { markAsSent, cacheImage, getCachedImage, getSentDiscordMessagesByTweetId, getSentTgMessagesByTweetId, deleteSentMessage, deleteSentTgMessage, storePendingApproval, deletePendingApproval, markApprovalDone, getAllPendingApprovals, storeDeadLetter } from './storage';
 import { renderTweetImage } from './renderer';
 
 interface PendingApproval {
@@ -21,9 +21,60 @@ interface PendingApproval {
   hasImage: boolean;
 }
 
+interface TargetResult {
+  label: string;
+  success: boolean;
+  error?: string;
+}
+
+interface SendResults {
+  total: number;
+  succeeded: number;
+  failed: number;
+  targets: TargetResult[];
+}
+
 const pendingApprovals = new Map<string, PendingApproval>();
 let telegramBotInstance: any = null;
 let discordClientInstance: Client | null = null;
+
+export function rehydratePendingApprovals(): number {
+  const persisted = getAllPendingApprovals();
+  let count = 0;
+
+  for (const p of persisted) {
+    try {
+      const tweet = JSON.parse(p.tweetJson) as ProcessedTweet;
+      const tgMsgIds: Record<string, number> = JSON.parse(p.telegramMsgIds);
+      const dcMsgIds: Record<string, string> = JSON.parse(p.discordMsgIds);
+
+      const approval: PendingApproval = {
+        id: p.approvalId,
+        groupName: p.groupName,
+        tweet,
+        telegramMessageIds: new Map(Object.entries(tgMsgIds)),
+        discordMessageIds: new Map(Object.entries(dcMsgIds)),
+        createdAt: new Date(p.createdAt),
+        approved: p.approved !== 0,
+        approvedBy: p.approvedBy || undefined,
+        sentTo: p.sentTo || undefined,
+        hasImage: p.hasImage !== 0,
+      };
+
+      pendingApprovals.set(p.approvalId, approval);
+      count++;
+    } catch (err) {
+      console.error(`Failed to rehydrate approval ${p.approvalId}:`, err);
+      deletePendingApproval(p.approvalId);
+    }
+  }
+
+  if (count > 0) {
+    console.log(`Rehydrated ${count} pending approvals from database`);
+  }
+
+  return count;
+}
 
 async function retryWithDelay<T>(
   fn: () => Promise<T>,
@@ -91,19 +142,61 @@ function getGroupTargetTags(group: GroupConfig): { tag: string; telegram: boolea
   return tags;
 }
 
+function withTimeoutResult<T>(promise: Promise<T>, ms: number, label: string, results: TargetResult[]): Promise<void> {
+  return Promise.race([
+    promise.then((val) => {
+      const success = typeof val === 'boolean' ? val : !!val;
+      results.push({ label, success, error: success ? undefined : 'returned falsy' });
+      console.log(`Send ${label}: ${success ? 'OK' : 'FAILED'}`);
+    }),
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        results.push({ label, success: false, error: `TIMEOUT (${ms}ms)` });
+        console.warn(`Send ${label}: TIMEOUT (${ms}ms)`);
+        resolve();
+      }, ms);
+      timer.unref();
+    }),
+  ]).catch((err) => {
+    results.push({ label, success: false, error: (err as Error).message });
+    console.error(`Send ${label}: ERROR - ${(err as Error).message}`);
+  });
+}
+
 async function dispatchGroupDirect(tweet: ProcessedTweet, group: GroupConfig, imageBuffer: Buffer | null): Promise<void> {
   const config = getConfig();
   const imageBuf = imageBuffer || getCachedImage(tweet.id) || undefined;
+  const promises: Promise<void>[] = [];
+  const results: TargetResult[] = [];
 
-  if (group.telegram && config.telegram.enabled) {
-    withTimeout(sendToTelegram(tweet, group.telegram.chatId, true, imageBuf).then(Boolean), 20000, `${group.name}/Telegram`);
+  if (group.telegram && config.telegram.enabled && telegramBotInstance) {
+    promises.push(
+      withTimeoutResult(sendToTelegram(tweet, group.telegram.chatId, true, imageBuf).then(Boolean), 20000, `${group.name}/Telegram/main`, results)
+    );
     for (const [tag, target] of Object.entries(group.telegram.targets || {})) {
-      withTimeout(sendToTelegram(tweet, target.chatId, true, imageBuf).then(Boolean), 20000, `${group.name}/Telegram/${tag}`);
+      promises.push(
+        withTimeoutResult(sendToTelegram(tweet, target.chatId, true, imageBuf).then(Boolean), 20000, `${group.name}/Telegram/${tag}`, results)
+      );
     }
   }
 
-  if (group.discord && config.discord.enabled) {
-    withTimeout(sendToDiscord(tweet, group.discord.channelId, true, imageBuf).then(Boolean), 20000, `${group.name}/Discord`);
+  if (group.discord && config.discord.enabled && discordClientInstance) {
+    promises.push(
+      withTimeoutResult(sendToDiscord(tweet, group.discord.channelId, true, imageBuf).then(m => !!m), 20000, `${group.name}/Discord`, results)
+    );
+  }
+
+  await Promise.allSettled(promises);
+
+  if (results.some(r => r.success)) {
+    markAsSent(tweet.id, tweet.author, tweet.content, tweet.url);
+  }
+
+  for (const r of results) {
+    if (!r.success) {
+      console.error(`DEAD LETTER [dispatched]: tweet=${tweet.id} target=${r.label} error=${r.error || 'unknown'}`);
+      storeDeadLetter(tweet.id, r.label, group.name, r.error || 'unknown');
+    }
   }
 }
 
@@ -311,6 +404,17 @@ export async function sendForApproval(tweet: ProcessedTweet): Promise<boolean> {
         hasImage: useImage && imageBuffer !== null,
       });
 
+      storePendingApproval({
+        approvalId,
+        groupName: group.name,
+        tweetJson: JSON.stringify(tweet),
+        telegramMsgIds: Object.fromEntries(telegramMessageIds),
+        discordMsgIds: Object.fromEntries(discordMessageIds),
+        createdAt: new Date(),
+        approved: false,
+        hasImage: useImage && imageBuffer !== null,
+      });
+
       console.log(`Sent tweet ${tweet.id} for approval (group: ${group.name}): ${approvalId}`);
     }
 
@@ -321,12 +425,7 @@ export async function sendForApproval(tweet: ProcessedTweet): Promise<boolean> {
     }
   }
 
-  if (anySent) {
-    markAsSent(tweet.id, tweet.author, tweet.content, tweet.url);
-    return true;
-  }
-
-  return false;
+  return anySent;
 }
 
 async function notifyOtherAdmins(
@@ -455,7 +554,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
-function dispatchToTargets(pending: PendingApproval, targetTag?: string): void {
+async function dispatchToTargets(pending: PendingApproval, targetTag?: string): Promise<SendResults> {
   const config = getConfig();
   const groups = getEffectiveGroups();
   const group = groups.find(g => g.name === pending.groupName);
@@ -463,38 +562,90 @@ function dispatchToTargets(pending: PendingApproval, targetTag?: string): void {
 
   if (!group) {
     console.error(`Group ${pending.groupName} not found for approval ${pending.id}`);
-    return;
+    return { total: 0, succeeded: 0, failed: 0, targets: [] };
   }
+
+  const promises: Promise<void>[] = [];
+  const results: TargetResult[] = [];
 
   if (targetTag === 'r14' && group.discord?.r14ChannelId) {
+    if (!discordClientInstance) {
+      results.push({ label: 'Discord/R14', success: false, error: 'Discord client not available' });
+      return { total: 1, succeeded: 0, failed: 1, targets: results };
+    }
     pending.sentTo = 'R14 (Discord)';
-    withTimeout(sendToDiscord(pending.tweet, group.discord.r14ChannelId, true, imageBuf).then(Boolean), 20000, `${pending.groupName}/Discord/R14`);
-    return;
-  }
-
-  if (targetTag && group.telegram?.targets?.[targetTag]) {
+    promises.push(
+      withTimeoutResult(sendToDiscord(pending.tweet, group.discord.r14ChannelId, true, imageBuf).then(m => !!m), 20000, `${pending.groupName}/Discord/R14`, results)
+    );
+  } else if (targetTag && group.telegram?.targets?.[targetTag]) {
+    if (!telegramBotInstance) {
+      results.push({ label: `Telegram/${targetTag}`, success: false, error: 'Telegram bot not available' });
+      return { total: 1, succeeded: 0, failed: 1, targets: results };
+    }
     const targetChatId = group.telegram.targets[targetTag].chatId;
     pending.sentTo = `${targetTag.toUpperCase()}`;
-    withTimeout(sendToTelegram(pending.tweet, targetChatId, true, imageBuf).then(Boolean), 20000, `${pending.groupName}/Telegram/${targetTag}`);
-    return;
+    promises.push(
+      withTimeoutResult(sendToTelegram(pending.tweet, targetChatId, true, imageBuf).then(Boolean), 20000, `${pending.groupName}/Telegram/${targetTag}`, results)
+    );
+  } else {
+    if (targetTag) {
+      console.warn(`Unknown target tag: ${targetTag} in group ${pending.groupName}, falling back to all`);
+    }
+
+    pending.sentTo = 'All';
+
+    if (group.telegram && config.telegram.enabled) {
+      if (telegramBotInstance) {
+        promises.push(
+          withTimeoutResult(sendToTelegram(pending.tweet, group.telegram.chatId, true, imageBuf).then(Boolean), 20000, `${pending.groupName}/Telegram/main`, results)
+        );
+      } else {
+        results.push({ label: 'Telegram/main', success: false, error: 'Telegram bot not available' });
+      }
+    }
+
+    for (const [tag, target] of Object.entries(group.telegram?.targets || {})) {
+      if (telegramBotInstance) {
+        promises.push(
+          withTimeoutResult(sendToTelegram(pending.tweet, target.chatId, true, imageBuf).then(Boolean), 20000, `${pending.groupName}/Telegram/${tag}`, results)
+        );
+      } else {
+        results.push({ label: `Telegram/${tag}`, success: false, error: 'Telegram bot not available' });
+      }
+    }
+
+    if (group.discord && config.discord.enabled) {
+      if (discordClientInstance) {
+        promises.push(
+          withTimeoutResult(sendToDiscord(pending.tweet, group.discord.channelId, true, imageBuf).then(m => !!m), 20000, `${pending.groupName}/Discord`, results)
+        );
+      } else {
+        results.push({ label: 'Discord', success: false, error: 'Discord client not available' });
+      }
+    }
   }
 
-  if (targetTag) {
-    console.warn(`Unknown target tag: ${targetTag} in group ${pending.groupName}, falling back to all`);
+  await Promise.allSettled(promises);
+
+  const succeeded = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+
+  if (succeeded > 0) {
+    markAsSent(pending.tweet.id, pending.tweet.author, pending.tweet.content, pending.tweet.url);
   }
 
-  pending.sentTo = 'All';
-  if (group.telegram && config.telegram.enabled) {
-    withTimeout(sendToTelegram(pending.tweet, group.telegram.chatId, true, imageBuf).then(Boolean), 20000, `${pending.groupName}/Telegram/main`);
+  for (const r of results) {
+    if (!r.success) {
+      console.error(`DEAD LETTER [approval=${pending.id}]: tweet=${pending.tweet.id} target=${r.label} error=${r.error || 'unknown'}`);
+      storeDeadLetter(pending.tweet.id, r.label, pending.groupName, r.error || 'unknown');
+    }
   }
 
-  for (const [tag, target] of Object.entries(group.telegram?.targets || {})) {
-    withTimeout(sendToTelegram(pending.tweet, target.chatId, true, imageBuf).then(Boolean), 20000, `${pending.groupName}/Telegram/${tag}`);
+  if (failed > 0) {
+    console.error(`Dispatch for approval ${pending.id}: ${succeeded}/${promises.length + results.filter(r => !r.success && !promises.length).length} succeeded, ${failed} failed`);
   }
 
-  if (group.discord && config.discord.enabled) {
-    withTimeout(sendToDiscord(pending.tweet, group.discord.channelId, true, imageBuf).then(Boolean), 20000, `${pending.groupName}/Discord`);
-  }
+  return { total: results.length, succeeded, failed, targets: results };
 }
 
 export async function handleTelegramApproval(ctx: Context): Promise<void> {
@@ -547,14 +698,16 @@ export async function handleTelegramApproval(ctx: Context): Promise<void> {
     pending.approved = true;
     pending.approvedBy = adminName;
 
-    dispatchToTargets(pending, targetTag);
+    const results = await dispatchToTargets(pending, targetTag);
 
+    markApprovalDone(pending.id, adminName, pending.sentTo);
     await notifyOtherAdmins(pending, adminName, 'approved', pending.sentTo);
-    console.log(`Approved by ${adminName} (Telegram) [${pending.groupName}]: ${approvalId}${targetTag ? ` → ${targetTag}` : ''}`);
+    console.log(`Approved by ${adminName} (Telegram) [${pending.groupName}]: ${approvalId}${targetTag ? ` → ${targetTag}` : ''} — ${results.succeeded}/${results.total} sent`);
   } else {
     await notifyOtherAdmins(pending, adminName, 'rejected');
     console.log(`Rejected by ${adminName} (Telegram) [${pending.groupName}]: ${approvalId}`);
     pendingApprovals.delete(approvalId);
+    deletePendingApproval(approvalId);
   }
 }
 
@@ -628,14 +781,16 @@ async function handleDiscordApprovalImpl(interaction: ButtonInteraction): Promis
     pending.approved = true;
     pending.approvedBy = adminName;
 
-    dispatchToTargets(pending, targetTag);
+    const results = await dispatchToTargets(pending, targetTag);
 
+    markApprovalDone(pending.id, adminName, pending.sentTo);
     await notifyOtherAdmins(pending, adminName, 'approved', pending.sentTo);
-    console.log(`Approved by ${adminName} (Discord) [${pending.groupName}]: ${approvalId}${targetTag ? ` → ${targetTag}` : ''}`);
+    console.log(`Approved by ${adminName} (Discord) [${pending.groupName}]: ${approvalId}${targetTag ? ` → ${targetTag}` : ''} — ${results.succeeded}/${results.total} sent`);
   } else {
     await notifyOtherAdmins(pending, adminName, 'rejected');
     console.log(`Rejected by ${adminName} (Discord) [${pending.groupName}]: ${approvalId}`);
     pendingApprovals.delete(approvalId);
+    deletePendingApproval(approvalId);
   }
 }
 
@@ -809,6 +964,7 @@ async function recallDispatchedMessages(approvalId: string): Promise<number> {
   }
 
   pendingApprovals.delete(approvalId);
+  deletePendingApproval(approvalId);
   return deleted;
 }
 
@@ -953,6 +1109,7 @@ export function cleanupExpiredApprovals(maxAgeMinutes: number = 60): number {
     const age = (now - approval.createdAt.getTime()) / (1000 * 60);
     if (age > maxAgeMinutes) {
       pendingApprovals.delete(id);
+      deletePendingApproval(id);
       cleaned++;
     }
   }
