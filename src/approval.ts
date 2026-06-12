@@ -163,7 +163,9 @@ function getGroupTargetTags(group: GroupConfig): { tag: string; telegram: boolea
   return tags;
 }
 
-function withTimeoutResult<T>(promise: Promise<T>, ms: number, label: string, results: TargetResult[]): Promise<void> {
+function withTimeoutResult<T>(promise: Promise<T>, ms: number, label: string, results: TargetResult[], tweetUrl?: string): Promise<void> {
+  const urlSuffix = tweetUrl ? ` (${tweetUrl})` : '';
+
   return Promise.race([
     promise.then((val) => {
       const success = typeof val === "boolean" ? val : !!val;
@@ -173,14 +175,14 @@ function withTimeoutResult<T>(promise: Promise<T>, ms: number, label: string, re
     new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
         results.push({ label, success: false, error: `超时 (${ms}ms)` });
-        console.warn(`[发送] ${label}: 超时 (${ms}ms)`);
+        console.warn(`[发送] ${label}: 超时 (${ms}ms)${urlSuffix}`);
         resolve();
       }, ms);
       timer.unref();
     }),
   ]).catch((err) => {
     results.push({ label, success: false, error: (err as Error).message });
-    console.error(`[发送] ${label}: 错误 - ${(err as Error).message}`);
+    console.error(`[发送] ${label}: 错误 - ${(err as Error).message}${urlSuffix}`);
   });
 }
 
@@ -201,6 +203,7 @@ async function dispatchGroupDirect(
         90000,
         `${group.name}/Telegram/main`,
         results,
+        tweet.url,
       ),
     );
     for (const [tag, target] of Object.entries(group.telegram.targets || {})) {
@@ -210,6 +213,7 @@ async function dispatchGroupDirect(
           90000,
           `${group.name}/Telegram/${tag}`,
           results,
+          tweet.url,
         ),
       );
     }
@@ -222,6 +226,7 @@ async function dispatchGroupDirect(
         90000,
         `${group.name}/Discord`,
         results,
+        tweet.url,
       ),
     );
   }
@@ -620,6 +625,7 @@ async function dispatchToTargets(pending: PendingApproval, targetTag?: string): 
         90000,
         `${pending.groupName}/Discord/R14`,
         results,
+        pending.tweet.url,
       ),
     );
   } else if (targetTag && group.telegram?.targets?.[targetTag]) {
@@ -635,6 +641,7 @@ async function dispatchToTargets(pending: PendingApproval, targetTag?: string): 
         90000,
         `${pending.groupName}/Telegram/${targetTag}`,
         results,
+        pending.tweet.url,
       ),
     );
   } else {
@@ -652,6 +659,7 @@ async function dispatchToTargets(pending: PendingApproval, targetTag?: string): 
             90000,
             `${pending.groupName}/Telegram/main`,
             results,
+            pending.tweet.url,
           ),
         );
       } else {
@@ -667,6 +675,7 @@ async function dispatchToTargets(pending: PendingApproval, targetTag?: string): 
             90000,
             `${pending.groupName}/Telegram/${tag}`,
             results,
+            pending.tweet.url,
           ),
         );
       } else {
@@ -682,6 +691,7 @@ async function dispatchToTargets(pending: PendingApproval, targetTag?: string): 
             90000,
             `${pending.groupName}/Discord`,
             results,
+            pending.tweet.url,
           ),
         );
       } else {

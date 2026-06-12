@@ -15,7 +15,11 @@ import { Tweet } from './types';
 const _log = console.log.bind(console);
 const _warn = console.warn.bind(console);
 const _error = console.error.bind(console);
-const ts = () => `[${new Date().toISOString()}]`;
+const ts = () => {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `[${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}]`;
+};
 
 console.log = (...args: any[]) => _log(ts(), ...args);
 console.warn = (...args: any[]) => _warn(ts(), ...args);
