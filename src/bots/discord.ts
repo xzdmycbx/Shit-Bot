@@ -296,7 +296,8 @@ export function initDiscordAiChat(): boolean {
     const allowedGuilds = getConfig().ai.allowedGuildIds;
     if (allowedGuilds && allowedGuilds.length > 0) {
       const guildId = message.guildId;
-      if (!guildId || !allowedGuilds.includes(guildId)) {
+      if (!guildId || !allowedGuilds.map(String).includes(guildId)) {
+        console.log(`[AI] 服务器 ${guildId || 'DM'} 不在 AI 允许列表中，跳过`);
         return;
       }
     }
