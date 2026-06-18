@@ -74,7 +74,7 @@ export async function initTelegram(): Promise<boolean> {
   }
 }
 
-export async function sendToTelegram(tweet: ProcessedTweet, targetChatId?: string, asImage?: boolean, preRenderedImage?: Buffer): Promise<boolean> {
+export async function sendToTelegram(tweet: ProcessedTweet, targetChatId?: string, asImage?: boolean, preRenderedImage?: Buffer, approvalId?: string): Promise<boolean> {
   const config = getConfig();
   const sendImage = asImage ?? config.sendAsImage;
   const chatId = targetChatId;
@@ -91,30 +91,31 @@ export async function sendToTelegram(tweet: ProcessedTweet, targetChatId?: strin
   const message = formatTweetHTML(tweet);
 
   if (sendImage) {
-    const imageSent = await trySendImage(chatId, tweet, message, preRenderedImage);
+    const imageSent = await trySendImage(chatId, tweet, message, preRenderedImage, approvalId);
     if (imageSent) return true;
     console.warn(`图片发送失败, 推文 ${tweet.id}, 回退到文本模式`);
   }
 
   if (tweet.mediaUrls.length > 0 && tweet.mediaUrls[0]) {
-    const mediaSent = await trySendMedia(chatId, tweet, tweet.mediaUrls[0], message);
+    const mediaSent = await trySendMedia(chatId, tweet, tweet.mediaUrls[0], message, approvalId);
     if (mediaSent) return true;
   }
 
-  const textSent = await trySendText(chatId, message, `tweet ${tweet.id}`, tweet.id);
+  const textSent = await trySendText(chatId, message, `tweet ${tweet.id}`, tweet.id, approvalId);
   if (textSent) return true;
 
   console.error(`[Telegram] 推文 ${tweet.id} 发送失败, 所有方式均未成功`);
   return false;
 }
 
-async function trySendImage(chatId: string, tweet: ProcessedTweet, message: string, preRenderedImage?: Buffer): Promise<boolean> {
+async function trySendImage(chatId: string, tweet: ProcessedTweet, message: string, preRenderedImage?: Buffer, approvalId?: string): Promise<boolean> {
   if (!bot) return false;
 
   const imageBuffer = preRenderedImage || await renderTweetImage(tweet);
   if (!imageBuffer) return false;
 
-  const caption = `<b>@${escapeHTML(tweet.author)}</b>\n<a href="${tweet.url}">🔗 在 X 上查看</a>`;
+  const idFooter = approvalId ? `\n\n<i>🆔 ${escapeHTML(approvalId)}</i>` : '';
+  const caption = `<b>@${escapeHTML(tweet.author)}</b>\n<a href="${tweet.url}">🔗 在 X 上查看</a>${idFooter}`;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -136,22 +137,24 @@ async function trySendImage(chatId: string, tweet: ProcessedTweet, message: stri
   return false;
 }
 
-async function trySendMedia(chatId: string, tweet: ProcessedTweet, mediaUrl: string, message: string): Promise<boolean> {
+async function trySendMedia(chatId: string, tweet: ProcessedTweet, mediaUrl: string, message: string, approvalId?: string): Promise<boolean> {
   if (!bot) return false;
 
   const isVideo = mediaUrl.includes('.mp4') || mediaUrl.includes('video');
+  const idFooter = approvalId ? `\n\n<i>🆔 ${escapeHTML(approvalId)}</i>` : '';
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
+      const caption = (message + idFooter).substring(0, 1024);
       let sent: any;
       if (isVideo) {
         sent = await callWithTimeout(() => bot!.telegram.sendVideo(chatId, mediaUrl, {
-          caption: message.substring(0, 1024),
+          caption,
           parse_mode: 'HTML',
         }));
       } else {
         sent = await callWithTimeout(() => bot!.telegram.sendPhoto(chatId, mediaUrl, {
-          caption: message.substring(0, 1024),
+          caption,
           parse_mode: 'HTML',
         }));
       }
@@ -168,12 +171,15 @@ async function trySendMedia(chatId: string, tweet: ProcessedTweet, mediaUrl: str
   return false;
 }
 
-async function trySendText(chatId: string, message: string, label: string, tweetId?: string): Promise<boolean> {
+async function trySendText(chatId: string, message: string, label: string, tweetId?: string, approvalId?: string): Promise<boolean> {
   if (!bot) return false;
+
+  const idFooter = approvalId ? `\n\n<i>🆔 ${escapeHTML(approvalId)}</i>` : '';
+  const text = message + idFooter;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const sent = await callWithTimeout(() => bot!.telegram.sendMessage(chatId, message, {
+      const sent = await callWithTimeout(() => bot!.telegram.sendMessage(chatId, text, {
         parse_mode: 'HTML',
       }));
       if (tweetId) {

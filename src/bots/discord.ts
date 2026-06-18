@@ -54,7 +54,7 @@ export async function initDiscord(): Promise<boolean> {
   }
 }
 
-export async function sendToDiscord(tweet: ProcessedTweet, channelId?: string, asImage?: boolean, preRenderedImage?: Buffer): Promise<Message | null> {
+export async function sendToDiscord(tweet: ProcessedTweet, channelId?: string, asImage?: boolean, preRenderedImage?: Buffer, approvalId?: string): Promise<Message | null> {
   const config = getConfig();
   const sendImage = asImage ?? config.sendAsImage;
 
@@ -97,6 +97,10 @@ export async function sendToDiscord(tweet: ProcessedTweet, channelId?: string, a
           .setColor((config.discord.embedColor || '#1DA1F2') as `#${string}`)
           .setTimestamp(tweet.publishedAt);
 
+        if (approvalId) {
+          embed.setFooter({ text: `🆔 ${approvalId}` });
+        }
+
         sentMessage = await sendWithRetry(sendTo, { embeds: [embed], files: [attachment] }, tweet.id);
         if (sentMessage) {
           storeSentMessage(sendTo.id, sentMessage.id, tweet.id);
@@ -117,7 +121,12 @@ export async function sendToDiscord(tweet: ProcessedTweet, channelId?: string, a
       embed.setImage(tweet.mediaUrls[0]);
     }
 
-    embed.setFooter({ text: `${tweet.mediaUrls.length} 个媒体附件` });
+    const footerParts: string[] = [];
+    if (approvalId) footerParts.push(`🆔 ${approvalId}`);
+    if (tweet.mediaUrls.length > 0) footerParts.push(`${tweet.mediaUrls.length} 个媒体附件`);
+    if (footerParts.length > 0) {
+      embed.setFooter({ text: footerParts.join(' | ') });
+    }
 
     sentMessage = await sendWithRetry(sendTo, { embeds: [embed] }, tweet.id);
     if (sentMessage) {

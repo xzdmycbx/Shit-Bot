@@ -621,7 +621,7 @@ async function dispatchToTargets(pending: PendingApproval, targetTag?: string): 
     pending.sentTo = "R14 (Discord)";
     promises.push(
       withTimeoutResult(
-        sendToDiscord(pending.tweet, group.discord.r14ChannelId, true, imageBuf).then((m) => !!m),
+        sendToDiscord(pending.tweet, group.discord.r14ChannelId, true, imageBuf, pending.id).then((m) => !!m),
         90000,
         `${pending.groupName}/Discord/R14`,
         results,
@@ -637,7 +637,7 @@ async function dispatchToTargets(pending: PendingApproval, targetTag?: string): 
     pending.sentTo = `${targetTag.toUpperCase()}`;
     promises.push(
       withTimeoutResult(
-        sendToTelegram(pending.tweet, targetChatId, true, imageBuf).then(Boolean),
+        sendToTelegram(pending.tweet, targetChatId, true, imageBuf, pending.id).then(Boolean),
         90000,
         `${pending.groupName}/Telegram/${targetTag}`,
         results,
@@ -655,7 +655,7 @@ async function dispatchToTargets(pending: PendingApproval, targetTag?: string): 
       if (telegramBotInstance) {
         promises.push(
           withTimeoutResult(
-            sendToTelegram(pending.tweet, group.telegram.chatId, true, imageBuf).then(Boolean),
+            sendToTelegram(pending.tweet, group.telegram.chatId, true, imageBuf, pending.id).then(Boolean),
             90000,
             `${pending.groupName}/Telegram/main`,
             results,
@@ -671,7 +671,7 @@ async function dispatchToTargets(pending: PendingApproval, targetTag?: string): 
       if (telegramBotInstance) {
         promises.push(
           withTimeoutResult(
-            sendToTelegram(pending.tweet, target.chatId, true, imageBuf).then(Boolean),
+            sendToTelegram(pending.tweet, target.chatId, true, imageBuf, pending.id).then(Boolean),
             90000,
             `${pending.groupName}/Telegram/${tag}`,
             results,
@@ -687,7 +687,7 @@ async function dispatchToTargets(pending: PendingApproval, targetTag?: string): 
       if (discordClientInstance) {
         promises.push(
           withTimeoutResult(
-            sendToDiscord(pending.tweet, group.discord.channelId, true, imageBuf).then((m) => !!m),
+            sendToDiscord(pending.tweet, group.discord.channelId, true, imageBuf, pending.id).then((m) => !!m),
             90000,
             `${pending.groupName}/Discord`,
             results,
