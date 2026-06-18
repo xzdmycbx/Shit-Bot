@@ -63,14 +63,14 @@ async function processAndSendTweets(username: string, tweets: Tweet[]): Promise<
       await sendToAllGroups(tweet);
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
-
-    markMultipleAsSent(passed.map(t => ({
-      id: t.id,
-      author: t.author,
-      content: t.content,
-      url: t.url,
-    })));
   }
+
+  markMultipleAsSent(passed.map(t => ({
+    id: t.id,
+    author: t.author,
+    content: t.content,
+    url: t.url,
+  })));
 }
 
 async function pollAndSend(): Promise<void> {
