@@ -145,6 +145,12 @@ function validateConfig(cfg: AppConfig): void {
     throw new Error('At least one group must have users configured');
   }
 
+  const hasWildcardGroup = cfg.groups.some(g => g.users?.some(u => u.username === '*'));
+  const hasDefaultUsers = (cfg.users || []).length > 0;
+  if (hasWildcardGroup && !hasDefaultUsers) {
+    throw new Error('Groups use wildcard "*" but no top-level users are configured');
+  }
+
   if (cfg.discord.enabled) {
     if (!cfg.discord.token) {
       throw new Error('Discord is enabled but token is missing');
@@ -215,7 +221,15 @@ export function getConfig(): AppConfig {
 
 export function getEffectiveGroups(): GroupConfig[] {
   const cfg = getConfig();
-  return cfg.groups || [];
+  const defaultUsers = cfg.users || [];
+  const groups = cfg.groups || [];
+  return groups.map(g => {
+    if (!g.users) return g;
+    const hasWildcard = g.users.some(u => u.username === '*');
+    if (!hasWildcard) return g;
+    const filtered = g.users.filter(u => u.username !== '*');
+    return { ...g, users: [...filtered, ...defaultUsers] };
+  });
 }
 
 export function getAllMonitoredUsers(): Array<{ username: string; groups: string[] }> {
@@ -282,6 +296,7 @@ export function saveConfig(newConfig: AppConfig): void {
   rawConfigData.pollIntervalMinutes = newConfig.pollIntervalMinutes;
   rawConfigData.maxPostsPerFetch = newConfig.maxPostsPerFetch;
   rawConfigData.maxTweetAgeMinutes = newConfig.maxTweetAgeMinutes;
+  rawConfigData.users = newConfig.users;
   rawConfigData.groups = newConfig.groups;
 
   const ext = path.extname(loadedConfigPath).toLowerCase();
