@@ -130,6 +130,7 @@ function tryRehydrateApproval(approvalId: string): PendingApproval | undefined {
     return approval;
   } catch (err) {
     console.error(`[恢复] 按需恢复审批记录失败 ${approvalId}:`, err);
+    deletePendingApproval(approvalId);
     return undefined;
   }
 }
@@ -491,11 +492,17 @@ export async function sendForApproval(tweet: ProcessedTweet): Promise<boolean> {
         hasImage: useImage && imageBuffer !== null,
       });
 
+      const tweetJson = JSON.stringify(tweet);
+      if (!tweetJson) {
+        console.error(`[审批] 推文 ${tweet.id} JSON 序列化失败, 跳过存储`);
+        continue;
+      }
+
       storePendingApproval({
         approvalId,
         groupName: group.name,
         tweetId: tweet.id,
-        tweetJson: JSON.stringify(tweet),
+        tweetJson,
         telegramMsgIds: Object.fromEntries(telegramMessageIds),
         discordMsgIds: Object.fromEntries(discordMessageIds),
         createdAt: new Date(),
