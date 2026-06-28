@@ -237,12 +237,16 @@ export async function chatWithAI(userMessage: string, ctx?: ChatContext): Promis
     1,
     images.length ? Math.min(cfg.maxToolIterations ?? 5, 3) : cfg.maxToolIterations ?? 5
   );
+  const pendingImages: string[] = [];
   const toolCtx: ToolContext = {
     platform,
     username,
     channelId: ctx?.channelId,
     excludeMessageId: ctx?.messageId,
     backfill: ctx?.backfillChannel,
+    addImages: (urls) => {
+      pendingImages.push(...urls);
+    },
   };
   let useTools = tools.length > 0;
 
@@ -322,6 +326,16 @@ export async function chatWithAI(userMessage: string, ctx?: ChatContext): Promis
             name,
             content: result,
           });
+        }
+
+        if (pendingImages.length > 0) {
+          const parts: ContentPart[] = [
+            { type: 'text', text: '（read_image 工具加载的图片，请查看后回答）' },
+          ];
+          for (const url of pendingImages.splice(0)) {
+            parts.push({ type: 'image_url', image_url: { url } });
+          }
+          messages.push({ role: 'user', content: parts });
         }
         continue;
       }

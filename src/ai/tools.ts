@@ -9,6 +9,33 @@ export interface ToolContext {
   channelId?: string;
   excludeMessageId?: string;
   backfill?: (targetTotal: number) => Promise<void>;
+  addImages?: (urls: string[]) => void;
+}
+
+function isLocalUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    const h = u.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    if (h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal')) return true;
+    const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (m) {
+      const a = Number(m[1]);
+      const b = Number(m[2]);
+      if (
+        a === 0 || a === 10 || a === 127 ||
+        (a === 169 && b === 254) ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168) ||
+        (a === 100 && b >= 64 && b <= 127)
+      ) {
+        return true;
+      }
+    }
+    if (h === '::1' || h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe80')) return true;
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 export interface OpenAITool {
@@ -134,6 +161,26 @@ export function buildTools(): OpenAITool[] {
     });
   }
 
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'read_image',
+      description:
+        '当你需要"看"某张图片才能回答时调用：传入图片的 http(s) 直链(例如搜索结果里的图、用户在文字里贴的图片网址、网页里的配图)，系统会把图片加载进上下文供你查看后再作答。仅用于你确实需要看图的情况。',
+      parameters: {
+        type: 'object',
+        properties: {
+          urls: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '一个或多个图片的 http(s) 公网直链',
+          },
+        },
+        required: ['urls'],
+      },
+    },
+  });
+
   if (ai.summary?.enabled) {
     tools.push({
       type: 'function',
@@ -186,6 +233,20 @@ export async function executeTool(
       case 'open_url': {
         const text = await fetchUrl(args.url);
         return text || '(该页面没有可读取的文本)';
+      }
+      case 'read_image': {
+        if (!ctx.addImages) return '当前环境不支持加载图片。';
+        const list: unknown[] = Array.isArray(args.urls)
+          ? args.urls
+          : args.url
+            ? [args.url]
+            : [];
+        const valid = list
+          .filter((u): u is string => typeof u === 'string' && /^https?:\/\//i.test(u) && !isLocalUrl(u))
+          .slice(0, 6);
+        if (valid.length === 0) return '没有有效的图片链接(需 http(s) 公网直链)。';
+        ctx.addImages(valid);
+        return `已加载 ${valid.length} 张图片到上下文，请查看后回答。`;
       }
       case 'read_channel_history': {
         if (!ctx.channelId) return '无法读取频道历史(缺少频道上下文)。';
