@@ -344,7 +344,7 @@ export function initDiscordAiChat(): boolean {
 
     if (guildAllowed && message.channel.isTextBased()) {
       const author = message.member?.displayName || message.author.username;
-      recordChannelMessage('discord', message.channelId, message.id, author, message.cleanContent, message.createdTimestamp);
+      recordChannelMessage('discord', message.channelId, message.id, author, message.cleanContent, message.createdTimestamp, extractImageUrls(message));
     }
 
     const botMentioned = message.mentions.has(client.user.id);
@@ -471,7 +471,7 @@ async function backfillChannelHistory(
     for (const m of arr) {
       if (m.author.bot) continue;
       const author = m.member?.displayName || m.author.username;
-      recordChannelMessage('discord', channelId, m.id, author, m.cleanContent, m.createdTimestamp);
+      recordChannelMessage('discord', channelId, m.id, author, m.cleanContent, m.createdTimestamp, extractImageUrls(m));
     }
     before = arr[arr.length - 1].id;
     have = getChannelMessageCount('discord', channelId);

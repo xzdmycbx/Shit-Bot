@@ -295,15 +295,18 @@ export async function chatWithAI(userMessage: string, ctx?: ChatContext): Promis
     channelId: ctx?.channelId,
     excludeMessageId: ctx?.messageId,
     backfill: ctx?.backfillChannel,
-    addImages: (urls) => {
+    addImages: (urls): number => {
+      let added = 0;
       for (const u of urls) {
         if (imagesLoaded >= MAX_TOTAL_IMAGES) break;
         if (!loadedImageUrls.has(u)) {
           loadedImageUrls.add(u);
           pendingImages.push(u);
           imagesLoaded++;
+          added++;
         }
       }
+      return added;
     },
   };
   let useTools = tools.length > 0;
